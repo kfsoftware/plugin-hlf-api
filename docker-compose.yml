@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  fabric-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fabric-api
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./crypto:/app/crypto
+    environment:
+      - FABRIC_MSPID=Org1MSP
+      - FABRIC_CERT_PATH=/app/crypto/cert.pem
+      - FABRIC_KEY_PATH=/app/crypto/key.pem
+      - FABRIC_PEERS=peer1:7051,peer2:7051,peer3:7051
+      - FABRIC_TLS_CERTS=/app/crypto/peer1-tls.pem,/app/crypto/peer2-tls.pem,/app/crypto/peer3-tls.pem
+      - FABRIC_CHANNEL=mychannel
+      - FABRIC_CHAINCODE=basic
+    networks:
+      - fabric-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  fabric-network:
+    external: true 

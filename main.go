@@ -35,16 +35,16 @@ var (
 
 func init() {
 	// Server flags
-	serveCmd.Flags().StringVarP(&port, "port", "p", "8080", "Port to run the server on")
+	serveCmd.Flags().StringVarP(&port, "port", "p", getEnvOrDefault("PORT", "8080"), "Port to run the server on")
 
 	// Fabric connection flags
-	serveCmd.Flags().StringVar(&mspID, "mspid", "", "MSP ID of the organization")
-	serveCmd.Flags().StringVar(&certPath, "cert", "", "Path to the client certificate")
-	serveCmd.Flags().StringVar(&keyPath, "key", "", "Path to the client private key")
-	serveCmd.Flags().StringVar(&peerEndpoints, "peers", "", "Comma-separated list of peer endpoints (host:port)")
-	serveCmd.Flags().StringVar(&tlsCertPaths, "tlscerts", "", "Comma-separated list of paths to the TLS certificates (one per peer)")
-	serveCmd.Flags().StringVar(&channelName, "channel", "", "Channel name")
-	serveCmd.Flags().StringVar(&chaincodeName, "chaincode", "", "Chaincode name")
+	serveCmd.Flags().StringVar(&mspID, "mspid", getEnvOrDefault("FABRIC_MSPID", ""), "MSP ID of the organization")
+	serveCmd.Flags().StringVar(&certPath, "cert", getEnvOrDefault("FABRIC_CERT_PATH", ""), "Path to the client certificate")
+	serveCmd.Flags().StringVar(&keyPath, "key", getEnvOrDefault("FABRIC_KEY_PATH", ""), "Path to the client private key")
+	serveCmd.Flags().StringVar(&peerEndpoints, "peers", getEnvOrDefault("FABRIC_PEERS", ""), "Comma-separated list of peer endpoints (host:port)")
+	serveCmd.Flags().StringVar(&tlsCertPaths, "tlscerts", getEnvOrDefault("FABRIC_TLS_CERTS", ""), "Comma-separated list of paths to the TLS certificates (one per peer)")
+	serveCmd.Flags().StringVar(&channelName, "channel", getEnvOrDefault("FABRIC_CHANNEL", ""), "Channel name")
+	serveCmd.Flags().StringVar(&chaincodeName, "chaincode", getEnvOrDefault("FABRIC_CHAINCODE", ""), "Chaincode name")
 
 	// Mark required flags
 	serveCmd.MarkFlagRequired("mspid")
@@ -56,6 +56,13 @@ func init() {
 	serveCmd.MarkFlagRequired("chaincode")
 
 	rootCmd.AddCommand(serveCmd)
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
 
 func main() {
@@ -104,6 +111,12 @@ func runServer(cmd *cobra.Command, args []string) {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+
+	// Health check endpoint
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {

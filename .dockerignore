@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# IDE specific files
+.idea
+.vscode
+*.swp
+*.swo
+
+# Binaries and build artifacts
+plugin-hlf-api
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+**/test/
+
+# Temporary files
+tmp/
+temp/
+
+# Certificates (should be mounted at runtime)
+*.pem
+crypto/
+
+# OS specific
+.DS_Store
+*.log 
