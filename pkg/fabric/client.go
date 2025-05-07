@@ -3,6 +3,8 @@ package fabric
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -30,12 +32,34 @@ type ClientConfig struct {
 	ChaincodeName string
 }
 
+// TransactionResult represents the result of a transaction
+type TransactionResult struct {
+	Result      []byte
+	TxID        string
+	Success     bool
+	BlockNumber uint64
+	ResultCode  uint32
+}
+
 // FabricClient represents a connection to the Fabric network
 type FabricClient struct {
-	config   *ClientConfig
-	contract *client.Contract
-	peers    []*grpc.ClientConn
-	rand     *rand.Rand
+	config *ClientConfig
+	rand   *rand.Rand
+}
+
+func ParseX509Certificate(contents []byte) (*x509.Certificate, error) {
+	if len(contents) == 0 {
+		return nil, errors.New("certificate pem is empty")
+	}
+	block, _ := pem.Decode(contents)
+	if block == nil {
+		return nil, errors.New("failed to decode PEM block")
+	}
+	crt, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return crt, nil
 }
 
 // NewFabricClient creates a new Fabric client instance
@@ -44,28 +68,61 @@ func NewFabricClient(config *ClientConfig) (*FabricClient, error) {
 		return nil, fmt.Errorf("at least one peer must be configured")
 	}
 
-	// Load client identity
-	certPEM, err := os.ReadFile(config.CertPath)
+	// Initialize random number generator with current time
+	source := rand.NewSource(time.Now().UnixNano())
+	random := rand.New(source)
+
+	return &FabricClient{
+		config: config,
+		rand:   random,
+	}, nil
+}
+
+// selectRandomPeer returns a random peer connection from the available peers
+func (fc *FabricClient) selectRandomPeer() (*grpc.ClientConn, error) {
+	// Select a random peer configuration
+	peerConfig := fc.config.Peers[fc.rand.Intn(len(fc.config.Peers))]
+
+	// Load TLS certificate for the peer
+	tlsCert, err := os.ReadFile(peerConfig.TLSCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read TLS cert file for peer %s: %w", peerConfig.Endpoint, err)
+	}
+
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(tlsCert)
+	transportCreds := credentials.NewClientTLSFromCert(certPool, "")
+
+	// Create gRPC connection
+	conn, err := grpc.Dial(peerConfig.Endpoint, grpc.WithTransportCredentials(transportCreds))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC connection to peer %s: %w", peerConfig.Endpoint, err)
+	}
+
+	return conn, nil
+}
+
+// createGatewayConnection creates a new gateway connection for a specific peer
+func (fc *FabricClient) createGatewayConnection(conn *grpc.ClientConn) (*client.Gateway, error) {
+	certPem, err := os.ReadFile(fc.config.CertPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read certificate file: %w", err)
 	}
 
-	keyPEM, err := os.ReadFile(config.KeyPath)
+	cert, err := ParseX509Certificate(certPem)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read private key file: %w", err)
+		return nil, fmt.Errorf("failed to parse certificate for the peer: %w", err)
 	}
 
-	cert, err := x509.ParseCertificate(certPEM)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
-	id, err := identity.NewX509Identity(config.MspID, cert)
+	id, err := identity.NewX509Identity(fc.config.MspID, cert)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create identity: %w", err)
 	}
-
-	pk, err := identity.PrivateKeyFromPEM(keyPEM)
+	keyPem, err := os.ReadFile(fc.config.KeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read private key file: %w", err)
+	}
+	pk, err := identity.PrivateKeyFromPEM(keyPem)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private key: %w", err)
 	}
@@ -75,131 +132,76 @@ func NewFabricClient(config *ClientConfig) (*FabricClient, error) {
 		return nil, fmt.Errorf("failed to create signer: %w", err)
 	}
 
-	// Initialize random number generator with current time
-	source := rand.NewSource(time.Now().UnixNano())
-	random := rand.New(source)
-
-	// Create connections to all peers
-	var peers []*grpc.ClientConn
-	for _, peerConfig := range config.Peers {
-		// Load TLS certificate for the peer
-		tlsCert, err := os.ReadFile(peerConfig.TLSCertPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read TLS cert file for peer %s: %w", peerConfig.Endpoint, err)
-		}
-
-		certPool := x509.NewCertPool()
-		certPool.AppendCertsFromPEM(tlsCert)
-		transportCreds := credentials.NewClientTLSFromCert(certPool, "")
-
-		// Create gRPC connection
-		conn, err := grpc.Dial(peerConfig.Endpoint, grpc.WithTransportCredentials(transportCreds))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gRPC connection to peer %s: %w", peerConfig.Endpoint, err)
-		}
-		peers = append(peers, conn)
-	}
-
-	// Randomly select initial peer
-	selectedPeer := peers[random.Intn(len(peers))]
-
-	// Create Gateway connection with the selected peer
-	gw, err := client.Connect(
-		id,
-		client.WithSign(signer),
-		client.WithClientConnection(selectedPeer),
-		client.WithEvaluateTimeout(5),
-		client.WithEndorseTimeout(15),
-		client.WithSubmitTimeout(5),
-		client.WithCommitStatusTimeout(1),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gateway: %w", err)
-	}
-
-	network := gw.GetNetwork(config.ChannelName)
-	contract := network.GetContract(config.ChaincodeName)
-
-	return &FabricClient{
-		config:   config,
-		contract: contract,
-		peers:    peers,
-		rand:     random,
-	}, nil
-}
-
-// selectRandomPeer returns a random peer connection from the available peers
-func (fc *FabricClient) selectRandomPeer() *grpc.ClientConn {
-	return fc.peers[fc.rand.Intn(len(fc.peers))]
-}
-
-// reconnectWithPeer creates a new gateway connection with the specified peer
-func (fc *FabricClient) reconnectWithPeer(conn *grpc.ClientConn) error {
-	cert, err := x509.ParseCertificate([]byte(fc.config.CertPath))
-	if err != nil {
-		return fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
-	id, err := identity.NewX509Identity(fc.config.MspID, cert)
-	if err != nil {
-		return fmt.Errorf("failed to create identity: %w", err)
-	}
-
-	pk, err := identity.PrivateKeyFromPEM([]byte(fc.config.KeyPath))
-	if err != nil {
-		return fmt.Errorf("failed to create private key: %w", err)
-	}
-
-	signer, err := identity.NewPrivateKeySign(pk)
-	if err != nil {
-		return fmt.Errorf("failed to create signer: %w", err)
-	}
-
-	gw, err := client.Connect(
+	return client.Connect(
 		id,
 		client.WithSign(signer),
 		client.WithClientConnection(conn),
-		client.WithEvaluateTimeout(5),
-		client.WithEndorseTimeout(15),
-		client.WithSubmitTimeout(5),
-		client.WithCommitStatusTimeout(1),
+		client.WithEvaluateTimeout(30*time.Second),
+		client.WithEndorseTimeout(30*time.Second),
+		client.WithSubmitTimeout(30*time.Second),
+		client.WithCommitStatusTimeout(30*time.Second),
 	)
-	if err != nil {
-		return fmt.Errorf("failed to create gateway: %w", err)
-	}
-
-	network := gw.GetNetwork(fc.config.ChannelName)
-	fc.contract = network.GetContract(fc.config.ChaincodeName)
-	return nil
 }
 
 // InvokeTransaction submits a transaction to the ledger
-func (fc *FabricClient) InvokeTransaction(ctx context.Context, fcn string, args []string) ([]byte, error) {
-	// Select a random peer for this transaction
-	selectedPeer := fc.selectRandomPeer()
-	if err := fc.reconnectWithPeer(selectedPeer); err != nil {
-		return nil, fmt.Errorf("failed to connect to peer: %w", err)
+func (fc *FabricClient) InvokeTransaction(ctx context.Context, fcn string, args []string) (*TransactionResult, error) {
+	// Select a random peer and create connection
+	selectedPeer, err := fc.selectRandomPeer()
+	if err != nil {
+		return nil, fmt.Errorf("failed to select peer: %w", err)
 	}
+	defer selectedPeer.Close()
 
-	result, err := fc.contract.Submit(
-		fcn,
-		client.WithArguments(args...),
-	)
+	// Create a new gateway connection
+	gw, err := fc.createGatewayConnection(selectedPeer)
+	if err != nil {
+		selectedPeer.Close()
+		return nil, fmt.Errorf("failed to create gateway connection: %w", err)
+	}
+	defer gw.Close()
+
+	network := gw.GetNetwork(fc.config.ChannelName)
+	contract := network.GetContract(fc.config.ChaincodeName)
+
+	result, commit, err := contract.SubmitAsync(fcn, client.WithArguments(args...))
 	if err != nil {
 		return nil, fmt.Errorf("failed to submit transaction: %w", err)
 	}
-	return result, nil
+
+	status, err := commit.Status()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit status: %w", err)
+	}
+
+	return &TransactionResult{
+		Result:      result,
+		TxID:        commit.TransactionID(),
+		BlockNumber: status.BlockNumber,
+		ResultCode:  uint32(status.Code.Number()),
+		Success:     status.Successful,
+	}, nil
 }
 
 // EvaluateTransaction evaluates a transaction without submitting to the ledger
 func (fc *FabricClient) EvaluateTransaction(ctx context.Context, fcn string, args []string) ([]byte, error) {
-	// Select a random peer for this query
-	selectedPeer := fc.selectRandomPeer()
-	if err := fc.reconnectWithPeer(selectedPeer); err != nil {
-		return nil, fmt.Errorf("failed to connect to peer: %w", err)
+	// Select a random peer and create connection
+	selectedPeer, err := fc.selectRandomPeer()
+	if err != nil {
+		return nil, fmt.Errorf("failed to select peer: %w", err)
 	}
+	defer selectedPeer.Close()
+	// Create a new gateway connection
+	gw, err := fc.createGatewayConnection(selectedPeer)
+	if err != nil {
+		selectedPeer.Close()
+		return nil, fmt.Errorf("failed to create gateway connection: %w", err)
+	}
+	defer gw.Close()
 
-	result, err := fc.contract.Evaluate(
+	network := gw.GetNetwork(fc.config.ChannelName)
+	contract := network.GetContract(fc.config.ChaincodeName)
+
+	result, err := contract.Evaluate(
 		fcn,
 		client.WithArguments(args...),
 	)
@@ -209,9 +211,7 @@ func (fc *FabricClient) EvaluateTransaction(ctx context.Context, fcn string, arg
 	return result, nil
 }
 
-// Close closes all peer connections
+// Close closes the client
 func (fc *FabricClient) Close() {
-	for _, conn := range fc.peers {
-		conn.Close()
-	}
+	// Nothing to close as connections are created and closed per operation
 }

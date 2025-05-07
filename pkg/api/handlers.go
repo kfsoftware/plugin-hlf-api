@@ -16,10 +16,13 @@ type TransactionRequest struct {
 
 // TransactionResponse represents the response structure
 type TransactionResponse struct {
-	Status  string      `json:"status"`
-	Message string      `json:"message,omitempty"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   string      `json:"error,omitempty"`
+	Status      string      `json:"status"`
+	Result      interface{} `json:"result,omitempty"`
+	Error       string      `json:"error,omitempty"`
+	TxID        string      `json:"tx_id,omitempty"`
+	BlockNumber uint64      `json:"block_number,omitempty"`
+	ResultCode  uint32      `json:"result_code,omitempty"`
+	Success     bool        `json:"success,omitempty"`
 }
 
 type Handler struct {
@@ -39,15 +42,19 @@ func (h *Handler) InvokeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.fabricClient.InvokeTransaction(r.Context(), req.Function, req.Args)
+	txResult, err := h.fabricClient.InvokeTransaction(r.Context(), req.Function, req.Args)
 	if err != nil {
 		sendErrorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	response := TransactionResponse{
-		Status: "success",
-		Result: string(result),
+		Status:      "success",
+		Result:      string(txResult.Result),
+		TxID:        txResult.TxID,
+		Success:     txResult.Success,
+		BlockNumber: txResult.BlockNumber,
+		ResultCode:  txResult.ResultCode,
 	}
 	sendJSONResponse(w, http.StatusOK, response)
 }
