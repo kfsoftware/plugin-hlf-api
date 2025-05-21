@@ -1,0 +1,62 @@
+apiVersion: dev.chainlaunch/v1
+kind: Plugin
+metadata:
+    name: my-plugin
+    version: '1.0'
+spec:
+    dockerCompose:
+        contents: |
+            version: '2.2'
+            services:
+              app:
+                image: plugin-hlf-api:latest
+                command: ["serve"]
+                environment:
+                  - MSPID={{ .mspId }}
+                  - CERT=/etc/chainlaunch/key/cert.pem
+                  - KEY=/etc/chainlaunch/key/key.pem
+                  - PEERS={{- range $i, $peer := .peers }}{{if $i}},{{end}}{{$peer.externalEndpoint}}{{- end }}
+                  - TLSCERTS={{- range $i, $peer := .peers }}{{if $i}},{{end}}{{$peer.tlsCertPath}}{{- end }}
+                  - CHANNEL={{ .channelName }}
+                  - CHAINCODE={{ .chaincodeName }}
+                  - PORT={{ .port }}
+                ports:
+                  - "{{ .port }}:8080"
+    parameters:
+        $schema: http://json-schema.org/draft-07/schema#
+        type: object
+        properties:
+            key:
+                type: object
+                title: Key
+                description: The key to use for the API
+                x-chainlaunch:
+                    type: key
+            mspId:
+                type: string
+                title: MSP ID
+                description: The MSP ID to use for the API
+                x-chainlaunch:
+                    type: msp
+            channelName:
+                type: string
+                title: Channel Name
+                description: The channel name to use for the API
+
+            chaincodeName:
+                type: string
+                title: Chaincode Name
+                description: The chaincode name to use for the API
+
+            peers:
+                type: array
+                title: Peers
+                description: The peers to use for the API
+                x-chainlaunch:
+                    type: peer
+            port:
+                type: number
+                title: Port
+                description: The port to use for the API
+
+        required: []
