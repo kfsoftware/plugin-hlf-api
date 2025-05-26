@@ -1,0 +1,125 @@
+basePath: /
+definitions:
+  api.TransactionRequest:
+    description: Transaction request structure for invoking or evaluating chaincode
+    properties:
+      args:
+        description: Arguments to pass to the chaincode function
+        example:
+        - '["asset1"'
+        - '"value1"]'
+        items:
+          type: string
+        type: array
+      chaincode_name:
+        description: Name of the chaincode to invoke
+        example: mycc
+        type: string
+      function:
+        description: Function name to call in the chaincode
+        example: createAsset
+        type: string
+    type: object
+  api.TransactionResponse:
+    description: Response structure for chaincode transactions
+    properties:
+      block_number:
+        description: Block number where the transaction was committed
+        example: 123
+        type: integer
+      error:
+        description: Error message (if failed)
+        example: Invalid arguments
+        type: string
+      result:
+        description: Result of the transaction (if successful)
+        example: '{"key":"value"}'
+        type: string
+      result_code:
+        description: Result code from the chaincode
+        example: 200
+        type: integer
+      status:
+        description: Status of the transaction ("success" or "error")
+        example: success
+        type: string
+      success:
+        description: Whether the transaction was successful
+        example: true
+        type: boolean
+      tx_id:
+        description: Transaction ID
+        example: tx123
+        type: string
+    type: object
+info:
+  contact: {}
+  description: API for interacting with Hyperledger Fabric network
+  title: Hyperledger Fabric API
+  version: "1.0"
+paths:
+  /api/evaluate:
+    post:
+      consumes:
+      - application/json
+      description: Evaluates a transaction on the Hyperledger Fabric network without
+        committing it
+      parameters:
+      - description: Transaction Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.TransactionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TransactionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.TransactionResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.TransactionResponse'
+      summary: Evaluate a chaincode transaction
+      tags:
+      - transactions
+  /api/invoke:
+    post:
+      consumes:
+      - application/json
+      description: Invokes a transaction on the Hyperledger Fabric network
+      parameters:
+      - description: Transaction Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.TransactionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TransactionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.TransactionResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.TransactionResponse'
+      summary: Invoke a chaincode transaction
+      tags:
+      - transactions
+schemes:
+- http
+- https
+swagger: "2.0"

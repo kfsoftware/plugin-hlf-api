@@ -9,11 +9,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	_ "github.com/kfsoftware/chainlaunch-plugin-hlf/docs" // This will be generated
 	"github.com/spf13/cobra"
+	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/api"
 	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/fabric"
 )
+
+// @title Hyperledger Fabric API
+// @version 1.0
+// @description API for interacting with Hyperledger Fabric network
+// @BasePath /
+// @schemes http https
 
 var (
 	port          string
@@ -35,7 +43,7 @@ var (
 
 func init() {
 	// Server flags
-	serveCmd.Flags().StringVarP(&port, "port", "p", getEnvOrDefault("PORT", "8080"), "Port to run the server on")
+	serveCmd.Flags().StringVarP(&port, "port", "p", getEnvOrDefault("PORT_API", "8180"), "Port to run the server on")
 
 	// Fabric connection flags
 	serveCmd.Flags().StringVar(&mspID, "mspid", getEnvOrDefault("FABRIC_MSPID", ""), "MSP ID of the organization")
@@ -73,10 +81,21 @@ func main() {
 }
 
 func runServer(cmd *cobra.Command, args []string) {
+	// Log all configuration parameters
+	log.Printf("Starting server with the following configuration:")
+	log.Printf("Port: %s", port)
+	log.Printf("MSP ID: %s", mspID)
+	log.Printf("Certificate Path: %s", certPath)
+	log.Printf("Key Path: %s", keyPath)
+	log.Printf("Peer Endpoints: %s", peerEndpoints)
+	log.Printf("TLS Certificate Paths: %s", tlsCertPaths)
+	log.Printf("Channel Name: %s", channelName)
+	log.Printf("Chaincode Name: %s", chaincodeName)
 	// Parse peer endpoints and TLS cert paths
 	peers := strings.Split(peerEndpoints, ",")
 	tlsCerts := strings.Split(tlsCertPaths, ",")
-
+	log.Printf("Number of peers: %v", peers)
+	log.Printf("Number of TLS certificates: %v", tlsCerts)
 	if len(peers) != len(tlsCerts) {
 		log.Fatalf("Number of peer endpoints (%d) must match number of TLS certificates (%d)", len(peers), len(tlsCerts))
 	}
@@ -118,6 +137,11 @@ func runServer(cmd *cobra.Command, args []string) {
 		w.Write([]byte("OK"))
 	})
 
+	// Swagger documentation
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
+
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/invoke", handler.InvokeHandler)
@@ -125,5 +149,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	})
 
 	log.Printf("Server starting on port %s with %d peers configured", port, len(peerConfigs))
+	log.Printf("Swagger documentation available at http://localhost:%s/swagger/", port)
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }
