@@ -1,8 +1,18 @@
 apiVersion: dev.chainlaunch/v1
 kind: Plugin
 metadata:
-    name: my-plugin
+    name: hlf-plugin-api
     version: '1.0'
+    description: "Hyperledger Fabric API plugin that provides a REST API interface to interact with Fabric networks"
+    author: "ChainLaunch Team"
+    tags:
+        - fabric
+        - api
+        - rest
+        - chaincode
+    repository: "https://github.com/chainlaunch/hlf-api-plugin"
+    license: "Apache-2.0"
+
 spec:
     dockerCompose:
         contents: |
@@ -10,18 +20,23 @@ spec:
             services:
               app:
                 image: plugin-hlf-api:latest
-                command: ["serve"]
-                environment:
-                  - MSPID={{ .mspId }}
-                  - CERT=/etc/chainlaunch/key/cert.pem
-                  - KEY=/etc/chainlaunch/key/key.pem
-                  - PEERS={{- range $i, $peer := .peers }}{{if $i}},{{end}}{{$peer.externalEndpoint}}{{- end }}
-                  - TLSCERTS={{- range $i, $peer := .peers }}{{if $i}},{{end}}{{$peer.tlsCertPath}}{{- end }}
-                  - CHANNEL={{ .channelName }}
-                  - CHAINCODE={{ .chaincodeName }}
-                  - PORT={{ .port }}
+                command: 
+                  - serve
+                  - --mspid={{ .parameters.key.MspID }}
+                  - --cert={{ .parameters.key.CertPath }}
+                  - --key={{ .parameters.key.KeyPath }}
+                  - --peers={{- range $i, $peer := .parameters.peers }}{{if $i}},{{end}}{{$peer.ExternalEndpoint}}{{- end }}
+                  - --channel={{ .parameters.channelName }}
+                  - --chaincode={{ .parameters.chaincodeName }}
+                  - --port={{ .parameters.port }}
+                  - --tlscerts={{- range $i, $peer := .parameters.peers }}{{if $i}},{{end}}{{$peer.TLSCertPath}}{{- end }}
                 ports:
-                  - "{{ .port }}:8080"
+                  - "{{ .parameters.port }}:{{ .parameters.port }}"
+                volumes:
+                  {{- range .volumeMounts }}
+                  - {{ .Source }}:{{ .Target }}:{{ if .ReadOnly }}ro{{ else }}rw{{ end }}
+                  {{- end }}
+
     parameters:
         $schema: http://json-schema.org/draft-07/schema#
         type: object
@@ -30,33 +45,205 @@ spec:
                 type: object
                 title: Key
                 description: The key to use for the API
-                x-chainlaunch:
-                    type: key
-            mspId:
-                type: string
-                title: MSP ID
-                description: The MSP ID to use for the API
-                x-chainlaunch:
-                    type: msp
+                x-source: fabric-key
             channelName:
                 type: string
                 title: Channel Name
                 description: The channel name to use for the API
-
             chaincodeName:
                 type: string
                 title: Chaincode Name
                 description: The chaincode name to use for the API
-
             peers:
                 type: array
                 title: Peers
                 description: The peers to use for the API
-                x-chainlaunch:
-                    type: peer
+                x-source: fabric-peer
             port:
                 type: number
                 title: Port
                 description: The port to use for the API
-
         required: []
+
+    documentation:
+        readme: |
+            # Hyperledger Fabric API Plugin
+
+            This plugin provides a REST API interface to interact with Hyperledger Fabric networks, allowing you to query and invoke chaincode operations through HTTP endpoints.
+
+            ## Features
+            - REST API interface for Fabric operations
+            - Support for multiple peers
+            - TLS certificate management
+            - Chaincode query and invoke operations
+            - Channel management
+
+            ## Prerequisites
+            - A running Hyperledger Fabric network
+            - Valid MSP certificates and keys
+            - Access to peer nodes
+            - Chaincode installed and instantiated
+
+            ## Configuration
+            The plugin requires the following parameters:
+            - `key`: Fabric key with MSP ID, certificate, and private key
+            - `channelName`: Name of the Fabric channel
+            - `chaincodeName`: Name of the chaincode to interact with
+            - `peers`: List of peer nodes to connect to
+            - `port`: Port for the API server
+
+            ## API Endpoints
+            The plugin exposes the following endpoints:
+            - `GET /api/v1/query`: Query chaincode
+            - `POST /api/v1/invoke`: Invoke chaincode
+            - `GET /api/v1/channel`: Get channel information
+            - `GET /api/v1/health`: Health check endpoint
+
+        examples:
+            - name: "Basic Chaincode Query"
+              description: "Configure the API to query a basic chaincode"
+              parameters:
+                key:
+                  MspID: "Org1MSP"
+                  CertPath: "/etc/hyperledger/crypto/peer/cert.pem"
+                  KeyPath: "/etc/hyperledger/crypto/peer/key.pem"
+                channelName: "mychannel"
+                chaincodeName: "mycc"
+                peers:
+                  - ExternalEndpoint: "peer0.org1.example.com:7051"
+                    TLSCertPath: "/etc/hyperledger/crypto/peer/tls/cert.pem"
+                port: 8080
+
+            - name: "Multi-Peer Configuration"
+              description: "Configure the API to work with multiple peers for redundancy"
+              parameters:
+                key:
+                  MspID: "Org1MSP"
+                  CertPath: "/etc/hyperledger/crypto/peer/cert.pem"
+                  KeyPath: "/etc/hyperledger/crypto/peer/key.pem"
+                channelName: "mychannel"
+                chaincodeName: "mycc"
+                peers:
+                  - ExternalEndpoint: "peer0.org1.example.com:7051"
+                    TLSCertPath: "/etc/hyperledger/crypto/peer0/tls/cert.pem"
+                  - ExternalEndpoint: "peer1.org1.example.com:7051"
+                    TLSCertPath: "/etc/hyperledger/crypto/peer1/tls/cert.pem"
+                port: 8080
+
+        troubleshooting:
+            - problem: "API cannot connect to peers"
+              solution: |
+                ### Quick Fix
+                1. Verify peer connectivity:
+                   ```bash
+                   docker-compose exec app ping peer0.org1.example.com
+                   ```
+                2. Check TLS certificates:
+                   ```bash
+                   ls -la /etc/hyperledger/crypto/peer/tls/
+                   ```
+                3. Validate peer endpoints:
+                   ```bash
+                   cat /etc/hyperledger/config/connection-profile.yaml
+                   ```
+
+                ### Common Issues
+                - Invalid TLS certificates
+                - Network connectivity problems
+                - Incorrect peer endpoints
+                - Firewall blocking access
+
+                ### Resolution Steps
+                1. **TLS Certificate Issues**
+                   - Verify certificate paths
+                   - Check certificate validity
+                   - Ensure proper permissions
+
+                2. **Network Issues**
+                   - Check DNS resolution
+                   - Verify network policies
+                   - Test peer connectivity
+
+                3. **Configuration Issues**
+                   - Validate connection profile
+                   - Check MSP configuration
+                   - Verify channel configuration
+              description: "This issue occurs when the API cannot establish connections to the Fabric peer nodes."
+
+            - problem: "Chaincode operations failing"
+              solution: |
+                ### Quick Fix
+                1. Verify chaincode status:
+                   ```bash
+                   peer chaincode list --instantiated -C mychannel
+                   ```
+                2. Check chaincode logs:
+                   ```bash
+                   docker-compose logs app | grep chaincode
+                   ```
+                3. Validate chaincode policy:
+                   ```bash
+                   peer chaincode query -C mychannel -n mycc -c '{"Args":["query","a"]}'
+                   ```
+
+                ### Common Issues
+                - Chaincode not instantiated
+                - Incorrect chaincode name
+                - Policy violations
+                - Endorsement failures
+
+                ### Resolution Steps
+                1. **Chaincode Installation**
+                   - Verify chaincode is installed
+                   - Check instantiation status
+                   - Validate chaincode version
+
+                2. **Policy Issues**
+                   - Review endorsement policy
+                   - Check organization permissions
+                   - Verify channel configuration
+
+                3. **Query/Invoke Issues**
+                   - Validate input parameters
+                   - Check chaincode logic
+                   - Review error messages
+              description: "This issue occurs when chaincode operations fail due to various reasons."
+
+            - problem: "API server not starting"
+              solution: |
+                ### Quick Fix
+                1. Check container logs:
+                   ```bash
+                   docker-compose logs app
+                   ```
+                2. Verify port availability:
+                   ```bash
+                   netstat -tulpn | grep 8080
+                   ```
+                3. Check configuration:
+                   ```bash
+                   docker-compose config
+                   ```
+
+                ### Common Issues
+                - Port conflicts
+                - Invalid configuration
+                - Missing dependencies
+                - Permission issues
+
+                ### Resolution Steps
+                1. **Port Issues**
+                   - Change port number
+                   - Stop conflicting services
+                   - Check firewall rules
+
+                2. **Configuration Issues**
+                   - Validate parameter values
+                   - Check environment variables
+                   - Review volume mounts
+
+                3. **Dependency Issues**
+                   - Verify image availability
+                   - Check network connectivity
+                   - Validate volume permissions
+              description: "This issue occurs when the API server fails to start properly." 
