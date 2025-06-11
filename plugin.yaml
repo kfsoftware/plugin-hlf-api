@@ -27,7 +27,6 @@ spec:
                   - --key={{ .parameters.key.KeyPath }}
                   - --peers={{- range $i, $peer := .parameters.peers }}{{if $i}},{{end}}{{$peer.ExternalEndpoint}}{{- end }}
                   - --channel={{ .parameters.channelName }}
-                  - --chaincode={{ .parameters.chaincodeName }}
                   - --port={{ .parameters.port }}
                   - --tlscerts={{- range $i, $peer := .parameters.peers }}{{if $i}},{{end}}{{$peer.TLSCertPath}}{{- end }}
                 ports:
@@ -50,10 +49,6 @@ spec:
                 type: string
                 title: Channel Name
                 description: The channel name to use for the API
-            chaincodeName:
-                type: string
-                title: Chaincode Name
-                description: The chaincode name to use for the API
             peers:
                 type: array
                 title: Peers
