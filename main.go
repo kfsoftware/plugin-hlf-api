@@ -31,7 +31,6 @@ var (
 	peerEndpoints string
 	tlsCertPaths  string
 	channelName   string
-	chaincodeName string
 
 	rootCmd  = &cobra.Command{Use: "hlf-api"}
 	serveCmd = &cobra.Command{
@@ -52,7 +51,6 @@ func init() {
 	serveCmd.Flags().StringVar(&peerEndpoints, "peers", getEnvOrDefault("FABRIC_PEERS", ""), "Comma-separated list of peer endpoints (host:port)")
 	serveCmd.Flags().StringVar(&tlsCertPaths, "tlscerts", getEnvOrDefault("FABRIC_TLS_CERTS", ""), "Comma-separated list of paths to the TLS certificates (one per peer)")
 	serveCmd.Flags().StringVar(&channelName, "channel", getEnvOrDefault("FABRIC_CHANNEL", ""), "Channel name")
-	serveCmd.Flags().StringVar(&chaincodeName, "chaincode", getEnvOrDefault("FABRIC_CHAINCODE", ""), "Chaincode name")
 
 	// Mark required flags
 	serveCmd.MarkFlagRequired("mspid")
@@ -61,7 +59,6 @@ func init() {
 	serveCmd.MarkFlagRequired("peers")
 	serveCmd.MarkFlagRequired("tlscerts")
 	serveCmd.MarkFlagRequired("channel")
-	serveCmd.MarkFlagRequired("chaincode")
 
 	rootCmd.AddCommand(serveCmd)
 }
@@ -90,7 +87,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	log.Printf("Peer Endpoints: %s", peerEndpoints)
 	log.Printf("TLS Certificate Paths: %s", tlsCertPaths)
 	log.Printf("Channel Name: %s", channelName)
-	log.Printf("Chaincode Name: %s", chaincodeName)
 	// Parse peer endpoints and TLS cert paths
 	peers := strings.Split(peerEndpoints, ",")
 	tlsCerts := strings.Split(tlsCertPaths, ",")
@@ -111,12 +107,11 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Initialize Fabric client
 	fabricClient, err := fabric.NewFabricClient(&fabric.ClientConfig{
-		MspID:         mspID,
-		CertPath:      certPath,
-		KeyPath:       keyPath,
-		Peers:         peerConfigs,
-		ChannelName:   channelName,
-		ChaincodeName: chaincodeName,
+		MspID:       mspID,
+		CertPath:    certPath,
+		KeyPath:     keyPath,
+		Peers:       peerConfigs,
+		ChannelName: channelName,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create Fabric client: %v", err)

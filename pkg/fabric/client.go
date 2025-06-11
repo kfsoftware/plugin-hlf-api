@@ -24,12 +24,11 @@ type PeerConfig struct {
 
 // ClientConfig holds the configuration for connecting to Fabric
 type ClientConfig struct {
-	MspID         string
-	CertPath      string
-	KeyPath       string
-	Peers         []PeerConfig
-	ChannelName   string
-	ChaincodeName string
+	MspID       string
+	CertPath    string
+	KeyPath     string
+	Peers       []PeerConfig
+	ChannelName string
 }
 
 // TransactionResult represents the result of a transaction
@@ -144,7 +143,7 @@ func (fc *FabricClient) createGatewayConnection(conn *grpc.ClientConn) (*client.
 }
 
 // InvokeTransaction submits a transaction to the ledger
-func (fc *FabricClient) InvokeTransaction(ctx context.Context, fcn string, args []string) (*TransactionResult, error) {
+func (fc *FabricClient) InvokeTransaction(ctx context.Context, chaincodeName string, fcn string, args []string) (*TransactionResult, error) {
 	// Select a random peer and create connection
 	selectedPeer, err := fc.selectRandomPeer()
 	if err != nil {
@@ -161,7 +160,7 @@ func (fc *FabricClient) InvokeTransaction(ctx context.Context, fcn string, args 
 	defer gw.Close()
 
 	network := gw.GetNetwork(fc.config.ChannelName)
-	contract := network.GetContract(fc.config.ChaincodeName)
+	contract := network.GetContract(chaincodeName)
 
 	result, commit, err := contract.SubmitAsync(fcn, client.WithArguments(args...))
 	if err != nil {
@@ -183,7 +182,7 @@ func (fc *FabricClient) InvokeTransaction(ctx context.Context, fcn string, args 
 }
 
 // EvaluateTransaction evaluates a transaction without submitting to the ledger
-func (fc *FabricClient) EvaluateTransaction(ctx context.Context, fcn string, args []string) ([]byte, error) {
+func (fc *FabricClient) EvaluateTransaction(ctx context.Context, chaincodeName string, fcn string, args []string) ([]byte, error) {
 	// Select a random peer and create connection
 	selectedPeer, err := fc.selectRandomPeer()
 	if err != nil {
@@ -199,7 +198,7 @@ func (fc *FabricClient) EvaluateTransaction(ctx context.Context, fcn string, arg
 	defer gw.Close()
 
 	network := gw.GetNetwork(fc.config.ChannelName)
-	contract := network.GetContract(fc.config.ChaincodeName)
+	contract := network.GetContract(chaincodeName)
 
 	result, err := contract.Evaluate(
 		fcn,

@@ -65,7 +65,12 @@ func (h *Handler) InvokeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	txResult, err := h.fabricClient.InvokeTransaction(r.Context(), req.Function, req.Args)
+	if req.ChaincodeName == "" {
+		sendErrorResponse(w, http.StatusBadRequest, "chaincode_name is required")
+		return
+	}
+
+	txResult, err := h.fabricClient.InvokeTransaction(r.Context(), req.ChaincodeName, req.Function, req.Args)
 	if err != nil {
 		sendErrorResponse(w, http.StatusInternalServerError, err.Error())
 		return
@@ -100,7 +105,12 @@ func (h *Handler) EvaluateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.fabricClient.EvaluateTransaction(r.Context(), req.Function, req.Args)
+	if req.ChaincodeName == "" {
+		sendErrorResponse(w, http.StatusBadRequest, "chaincode_name is required")
+		return
+	}
+
+	result, err := h.fabricClient.EvaluateTransaction(r.Context(), req.ChaincodeName, req.Function, req.Args)
 	if err != nil {
 		sendErrorResponse(w, http.StatusInternalServerError, err.Error())
 		return
