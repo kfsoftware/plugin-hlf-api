@@ -10,7 +10,7 @@ metadata:
         - api
         - rest
         - chaincode
-    repository: "https://github.com/chainlaunch/hlf-api-plugin"
+    repository: "https://github.com/kfsoftware/plugin-hlf-api"
     license: "Apache-2.0"
 
 spec:
@@ -19,7 +19,7 @@ spec:
             version: '2.2'
             services:
               app:
-                image: kfsoftware/plugin-hlf-api:0.0.1
+                image: kfsoftware/plugin-hlf-api:0.0.2
                 command: 
                   - serve
                   - --mspid={{ .parameters.key.MspID }}
