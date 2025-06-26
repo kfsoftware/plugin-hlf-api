@@ -19,7 +19,7 @@ spec:
             version: '2.2'
             services:
               app:
-                image: kfsoftware/plugin-hlf-api:0.0.2
+                image: ghcr.io/kfsoftware/plugin-hlf-api:main-9e27cb5
                 command: 
                   - serve
                   - --mspid={{ .parameters.key.MspID }}
