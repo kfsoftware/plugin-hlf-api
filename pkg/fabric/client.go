@@ -46,6 +46,12 @@ type FabricClient struct {
 	rand   *rand.Rand
 }
 
+// ChaincodeMetadata holds metadata for a chaincode
+type ChaincodeMetadata struct {
+	Name     string
+	Metadata []byte
+}
+
 func ParseX509Certificate(contents []byte) (*x509.Certificate, error) {
 	if len(contents) == 0 {
 		return nil, errors.New("certificate pem is empty")
@@ -208,6 +214,16 @@ func (fc *FabricClient) EvaluateTransaction(ctx context.Context, chaincodeName s
 		return nil, fmt.Errorf("failed to evaluate transaction: %w", err)
 	}
 	return result, nil
+}
+
+// EvaluateChaincodeMetadata fetches the chaincode metadata using the same logic as fetchChaincodeMetadata in main.go.
+func (fc *FabricClient) EvaluateChaincodeMetadata(chaincode string) (*ChaincodeMetadata, error) {
+	// Try org.hyperledger.fabric:GetMetadata, fallback to _lifecycle if needed
+	result, err := fc.EvaluateTransaction(context.Background(), chaincode, "org.hyperledger.fabric:GetMetadata", []string{})
+	if err != nil {
+		return nil, err
+	}
+	return &ChaincodeMetadata{Name: chaincode, Metadata: result}, nil
 }
 
 // Close closes the client

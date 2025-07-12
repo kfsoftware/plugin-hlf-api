@@ -13,9 +13,9 @@ type TransactionRequest struct {
 	// Name of the chaincode to invoke
 	ChaincodeName string `json:"chaincode_name" example:"mycc"`
 	// Function name to call in the chaincode
-	Function string `json:"function" example:"createAsset"`
+	Function string `json:"function" example:"GetAllAssets"`
 	// Arguments to pass to the chaincode function
-	Args []string `json:"args" example:"[\"asset1\",\"value1\"]"`
+	Args []string `json:"args" example:"[]"`
 }
 
 // TransactionResponse represents the response structure
@@ -61,18 +61,18 @@ func NewHandler(fabricClient *fabric.FabricClient) *Handler {
 func (h *Handler) InvokeHandler(w http.ResponseWriter, r *http.Request) {
 	var req TransactionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		SendErrorResponse(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if req.ChaincodeName == "" {
-		sendErrorResponse(w, http.StatusBadRequest, "chaincode_name is required")
+		SendErrorResponse(w, http.StatusBadRequest, "chaincode_name is required")
 		return
 	}
 
 	txResult, err := h.fabricClient.InvokeTransaction(r.Context(), req.ChaincodeName, req.Function, req.Args)
 	if err != nil {
-		sendErrorResponse(w, http.StatusInternalServerError, err.Error())
+		SendErrorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -84,7 +84,7 @@ func (h *Handler) InvokeHandler(w http.ResponseWriter, r *http.Request) {
 		BlockNumber: txResult.BlockNumber,
 		ResultCode:  txResult.ResultCode,
 	}
-	sendJSONResponse(w, http.StatusOK, response)
+	SendJSONResponse(w, http.StatusOK, response)
 }
 
 // EvaluateHandler godoc
@@ -101,18 +101,18 @@ func (h *Handler) InvokeHandler(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) EvaluateHandler(w http.ResponseWriter, r *http.Request) {
 	var req TransactionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		SendErrorResponse(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if req.ChaincodeName == "" {
-		sendErrorResponse(w, http.StatusBadRequest, "chaincode_name is required")
+		SendErrorResponse(w, http.StatusBadRequest, "chaincode_name is required")
 		return
 	}
 
 	result, err := h.fabricClient.EvaluateTransaction(r.Context(), req.ChaincodeName, req.Function, req.Args)
 	if err != nil {
-		sendErrorResponse(w, http.StatusInternalServerError, err.Error())
+		SendErrorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -120,19 +120,21 @@ func (h *Handler) EvaluateHandler(w http.ResponseWriter, r *http.Request) {
 		Status: "success",
 		Result: string(result),
 	}
-	sendJSONResponse(w, http.StatusOK, response)
+	SendJSONResponse(w, http.StatusOK, response)
 }
 
-func sendJSONResponse(w http.ResponseWriter, status int, data interface{}) {
+// Exported version of sendJSONResponse
+func SendJSONResponse(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
 }
 
-func sendErrorResponse(w http.ResponseWriter, status int, message string) {
+// Exported version of sendErrorResponse
+func SendErrorResponse(w http.ResponseWriter, status int, message string) {
 	response := TransactionResponse{
 		Status: "error",
 		Error:  message,
 	}
-	sendJSONResponse(w, status, response)
+	SendJSONResponse(w, status, response)
 }
