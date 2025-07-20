@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"io/ioutil"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-openapi/spec"
@@ -527,38 +525,6 @@ type fabricClientSwagger interface {
 
 var globalFabricClient *fabric.FabricClient
 
-func updateStaticSwaggerDescription(chaincodes []string) {
-	path := "docs/swagger.json"
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		log.Printf("Could not read %s: %v", path, err)
-		return
-	}
-	var doc map[string]interface{}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		log.Printf("Could not parse %s: %v", path, err)
-		return
-	}
-	info, ok := doc["info"].(map[string]interface{})
-	if !ok {
-		log.Printf("No info section in %s", path)
-		return
-	}
-	desc := "API for interacting with Hyperledger Fabric network.<br/><br/>Available chaincodes:<br/>"
-	for _, cc := range chaincodes {
-		desc += "<a href=\"/swagger/" + cc + ".json\">" + cc + "</a> "
-	}
-	info["description"] = desc
-	newData, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		log.Printf("Could not marshal updated swagger.json: %v", err)
-		return
-	}
-	if err := ioutil.WriteFile(path, newData, 0644); err != nil {
-		log.Printf("Could not write updated swagger.json: %v", err)
-	}
-}
-
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -623,9 +589,15 @@ func runServer(cmd *cobra.Command, args []string) {
 	})
 
 	// Swagger documentation
-	r.Get("/swagger/*", httpSwagger.Handler(
-		httpSwagger.URL("/swagger/doc.json"),
-	))
+	r.Get("/swagger/*", func(w http.ResponseWriter, r *http.Request) {
+		url := r.URL.Query().Get("url")
+		if url == "" {
+			url = "/swagger/doc.json"
+		}
+		httpSwagger.Handler(
+			httpSwagger.URL(url),
+		)(w, r)
+	})
 
 	// Static API routes
 	r.Post("/api/invoke", handler.InvokeHandler)
@@ -694,8 +666,6 @@ func runServer(cmd *cobra.Command, args []string) {
 			json.NewEncoder(w).Encode(swagger)
 		})
 	}
-
-	updateStaticSwaggerDescription(chaincodes)
 
 	log.Printf("Server starting on port %s with %d peers configured", port, len(peerConfigs))
 	log.Printf("Swagger documentation available at http://localhost:%s/swagger/", port)

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dynamic Hyperledger Fabric API Docs</title>
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist/swagger-ui.css" />
+  <style>
+    body { margin: 0; padding: 0; }
+    #topbar { padding: 1em; background: #f5f5f5; }
+    #chaincode-select { font-size: 1em; }
+    #doc-url-input { width: 350px; }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <label for="chaincode-select">Select Chaincode: </label>
+    <select id="chaincode-select"></select>
+    <span style="margin-left:2em;">or load doc URL: </span>
+    <input id="doc-url-input" type="text" placeholder="/swagger/mycc.json" />
+    <button id="load-doc-btn">Load</button>
+  </div>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script>
+  <script>
+    function getQueryParam(name) {
+      const url = new URL(window.location.href);
+      return url.searchParams.get(name);
+    }
+    async function loadChaincodes() {
+      const res = await fetch('/swagger/index.json');
+      const chaincodes = await res.json();
+      const select = document.getElementById('chaincode-select');
+      select.innerHTML = '';
+      chaincodes.forEach(cc => {
+        const opt = document.createElement('option');
+        opt.value = cc.url;
+        opt.textContent = cc.name;
+        select.appendChild(opt);
+      });
+      return chaincodes.length > 0 ? chaincodes[0].url : null;
+    }
+    function loadSwagger(url) {
+      window.ui = SwaggerUIBundle({
+        url: url,
+        dom_id: '#swagger-ui',
+        presets: [SwaggerUIBundle.presets.apis],
+        layout: "BaseLayout"
+      });
+    }
+    document.addEventListener('DOMContentLoaded', async () => {
+      const firstUrl = await loadChaincodes();
+      const urlParam = getQueryParam('url');
+      if (urlParam) {
+        document.getElementById('doc-url-input').value = urlParam;
+        loadSwagger(urlParam);
+      } else if (firstUrl) {
+        loadSwagger(firstUrl);
+      }
+      document.getElementById('chaincode-select').addEventListener('change', function() {
+        loadSwagger(this.value);
+        document.getElementById('doc-url-input').value = this.value;
+      });
+      document.getElementById('load-doc-btn').addEventListener('click', function() {
+        const url = document.getElementById('doc-url-input').value;
+        if (url) loadSwagger(url);
+      });
+      document.getElementById('doc-url-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          document.getElementById('load-doc-btn').click();
+        }
+      });
+    });
+  </script>
+</body>
+</html> 

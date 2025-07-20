@@ -6,8 +6,7 @@ definitions:
       args:
         description: Arguments to pass to the chaincode function
         example:
-        - '["asset1"'
-        - '"value1"]'
+        - '[]'
         items:
           type: string
         type: array
@@ -17,7 +16,7 @@ definitions:
         type: string
       function:
         description: Function name to call in the chaincode
-        example: createAsset
+        example: GetAllAssets
         type: string
     type: object
   api.TransactionResponse:
@@ -119,6 +118,26 @@ paths:
       summary: Invoke a chaincode transaction
       tags:
       - transactions
+  /refresh:
+    get:
+      description: Reloads chaincode metadata and updates dynamic endpoints for all
+        chaincodes
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.TransactionResponse'
+      summary: Refresh chaincode metadata and dynamic endpoints
+      tags:
+      - admin
 schemes:
 - http
 - https

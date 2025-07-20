@@ -28,7 +28,7 @@ spec:
                   - --peers={{- range $i, $peer := .parameters.peers }}{{if $i}},{{end}}{{$peer.ExternalEndpoint}}{{- end }}
                   - --channel={{ .parameters.channelName }}
                   - --port={{ .parameters.port }}
-                  - --tlscerts={{- range $i, $peer := .parameters.peers }}{{if $i}},{{end}}{{$peer.TLSCertPath}}{{- end }}
+                  - --tlscerts={{- range $i, $peer := .parameters.peers }}{{if $i}},{{end}}{{$peer.TLSCACertPath}}{{- end }}
                 ports:
                   - "{{ .parameters.port }}:{{ .parameters.port }}"
                 volumes:
@@ -106,7 +106,7 @@ spec:
                 chaincodeName: "mycc"
                 peers:
                   - ExternalEndpoint: "peer0.org1.example.com:7051"
-                    TLSCertPath: "/etc/hyperledger/crypto/peer/tls/cert.pem"
+                    TLSCACertPath: "/etc/hyperledger/crypto/peer/tls/cert.pem"
                 port: 8080
 
             - name: "Multi-Peer Configuration"
@@ -120,9 +120,9 @@ spec:
                 chaincodeName: "mycc"
                 peers:
                   - ExternalEndpoint: "peer0.org1.example.com:7051"
-                    TLSCertPath: "/etc/hyperledger/crypto/peer0/tls/cert.pem"
+                    TLSCACertPath: "/etc/hyperledger/crypto/peer0/tls/cert.pem"
                   - ExternalEndpoint: "peer1.org1.example.com:7051"
-                    TLSCertPath: "/etc/hyperledger/crypto/peer1/tls/cert.pem"
+                    TLSCACertPath: "/etc/hyperledger/crypto/peer1/tls/cert.pem"
                 port: 8080
 
         troubleshooting:
