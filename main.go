@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,11 +16,20 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-openapi/spec"
 	_ "github.com/kfsoftware/chainlaunch-plugin-hlf/docs" // This will be generated
-	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/api"
-	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/fabric"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	httpSwagger "github.com/swaggo/http-swagger"
+
+	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/api"
+	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/fabric"
+	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/metrics"
 )
+
+//go:embed docs/custom-swagger.html
+var playgroundHTML embed.FS
+
+//go:embed docs/swagger-index.html
+var swaggerIndexHTML embed.FS
 
 // @title Hyperledger Fabric API
 // @version 1.0
@@ -56,7 +66,7 @@ func init() {
 	serveCmd.Flags().StringVar(&peerEndpoints, "peers", getEnvOrDefault("FABRIC_PEERS", ""), "Comma-separated list of peer endpoints (host:port)")
 	serveCmd.Flags().StringVar(&tlsCertPaths, "tlscerts", getEnvOrDefault("FABRIC_TLS_CERTS", ""), "Comma-separated list of paths to the TLS certificates (one per peer)")
 	serveCmd.Flags().StringVar(&channelName, "channel", getEnvOrDefault("FABRIC_CHANNEL", ""), "Channel name")
-	serveCmd.Flags().StringSliceVar(&chaincodes, "chaincodes", []string{}, "Comma-separated list of chaincodes to inspect and expose as sub-APIs")
+	serveCmd.Flags().StringSliceVarP(&chaincodes, "chaincodes", "c", []string{}, "Comma-separated list of chaincodes to inspect and expose as sub-APIs")
 
 	// Mark required flags
 	serveCmd.MarkFlagRequired("mspid")
@@ -154,7 +164,7 @@ func (s *ChaincodeAPIServer) updateDynamicEndpoints() {
 		}
 		for contract, contractMeta := range parsed.Contracts {
 			for _, tx := range contractMeta.Transactions {
-				path := "/api/" + meta.Name + "/" + contract + "/" + tx.Name
+				path := "/api/chaincodes/" + meta.Name + "/" + contract + "/" + tx.Name
 				validPaths[path] = struct{}{}
 				// Add or update handler
 				s.dynamicHandlers[path] = s.makeFunctionHandler(meta.Name, contract, tx.Name, tx.Parameters)
@@ -198,7 +208,11 @@ func (s *ChaincodeAPIServer) makeFunctionHandler(chaincode, contract, function s
 			mode = "evaluate"
 		}
 		if mode == "submit" {
-			txResult, err := s.fabricClient.InvokeTransaction(r.Context(), chaincode, function, args)
+			f := function
+			if contract != "" {
+				f = fmt.Sprintf("%s:%s", contract, function)
+			}
+			txResult, err := s.fabricClient.InvokeTransaction(r.Context(), chaincode, f, args)
 			if err != nil {
 				api.SendErrorResponse(w, http.StatusInternalServerError, err.Error())
 				return
@@ -214,8 +228,12 @@ func (s *ChaincodeAPIServer) makeFunctionHandler(chaincode, contract, function s
 			api.SendJSONResponse(w, http.StatusOK, response)
 			return
 		}
+		f := function
+		if contract != "" {
+			f = fmt.Sprintf("%s:%s", contract, function)
+		}
 		// Default: evaluate
-		result, err := s.fabricClient.EvaluateTransaction(r.Context(), chaincode, function, args)
+		result, err := s.fabricClient.EvaluateTransaction(r.Context(), chaincode, f, args)
 		if err != nil {
 			api.SendErrorResponse(w, http.StatusInternalServerError, err.Error())
 			return
@@ -365,7 +383,7 @@ func generateSwaggerSpec(chaincode string) *spec.Swagger {
 			// For each contract and transaction, add a POST endpoint
 			for contractName, contract := range parsed.Contracts {
 				for _, tx := range contract.Transactions {
-					path := "/api/" + chaincode + "/" + contractName + "/" + tx.Name
+					path := "/api/chaincodes/" + chaincode + "/" + contractName + "/" + tx.Name
 					// Build parameters schema
 					paramsSchema := spec.Schema{
 						SchemaProps: spec.SchemaProps{
@@ -387,6 +405,7 @@ func generateSwaggerSpec(chaincode string) *spec.Swagger {
 						PathItemProps: spec.PathItemProps{
 							Post: &spec.Operation{
 								OperationProps: spec.OperationProps{
+									ID:          chaincode + contractName + tx.Name,
 									Summary:     "Invoke function '" + tx.Name + "' on contract '" + contractName + "' in " + chaincode,
 									Description: "Invoke function '" + tx.Name + "' on contract '" + contractName + "' in chaincode " + chaincode + `. Use the 'mode' query parameter to choose between 'evaluate' (default) and 'submit'.`,
 									Consumes:    []string{"application/json"},
@@ -431,12 +450,13 @@ func generateSwaggerSpec(chaincode string) *spec.Swagger {
 	}
 
 	// Always add generic invoke/evaluate endpoints
-	invokePath := "/api/" + chaincode + "/invoke"
-	evaluatePath := "/api/" + chaincode + "/evaluate"
+	invokePath := "/api/chaincodes/" + chaincode + "/invoke"
+	evaluatePath := "/api/chaincodes/" + chaincode + "/evaluate"
 	swagger.Paths.Paths[invokePath] = spec.PathItem{
 		PathItemProps: spec.PathItemProps{
 			Post: &spec.Operation{
 				OperationProps: spec.OperationProps{
+					ID:          chaincode + "Invoke",
 					Summary:     "Invoke " + chaincode,
 					Description: "Invoke transaction on " + chaincode,
 					Consumes:    []string{"application/json"},
@@ -470,6 +490,7 @@ func generateSwaggerSpec(chaincode string) *spec.Swagger {
 		PathItemProps: spec.PathItemProps{
 			Post: &spec.Operation{
 				OperationProps: spec.OperationProps{
+					ID:          chaincode + "Evaluate",
 					Summary:     "Evaluate " + chaincode,
 					Description: "Evaluate transaction on " + chaincode,
 					Consumes:    []string{"application/json"},
@@ -574,19 +595,74 @@ func runServer(cmd *cobra.Command, args []string) {
 	defer fabricClient.Close()
 	globalFabricClient = fabricClient
 
+	peerConn, err := fabricClient.SelectRandomPeer()
+	if err != nil {
+		log.Fatalf("Failed to select random peer: %v", err)
+	}
+
+	keyBytes, err := os.ReadFile(keyPath)
+	if err != nil {
+		log.Fatalf("Failed to read key file: %v", err)
+	}
+	certBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		log.Fatalf("Failed to read cert file: %v", err)
+	}
+	adminID, _, err := fabricClient.GetAdminIdentity(context.Background(), keyBytes, certBytes)
+	if err != nil {
+		log.Fatalf("Failed to get admin identity: %v", err)
+	}
+
+	committedCCs, err := fabricClient.GetCommittedChaincodes(context.Background(), peerConn, adminID, channelName)
+	if err != nil {
+		log.Printf("Failed to get committed chaincodes, but continuing: %v", err)
+	} else {
+		for _, committedCC := range committedCCs {
+			exists := false
+			for _, cc := range chaincodes {
+				if cc == committedCC.Name {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				chaincodes = append(chaincodes, committedCC.Name)
+			}
+		}
+	}
+	if peerConn != nil {
+		log.Printf("Closing peer connection")
+		peerConn.Close()
+	}
+
+	log.Printf("chaincodes: %v", chaincodes)
 	// Initialize API handlers
 	handler := api.NewHandler(fabricClient)
+
+	// Initialize metrics collector
+	metricsCollector := metrics.NewMetricsCollector(30 * time.Second)
+	metricsCollector.Start()
+	defer metricsCollector.Stop()
 
 	// Set up Chi router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(metrics.HTTPMiddleware)
+
+	// Root endpoint - redirect to playground
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/playground", http.StatusMovedPermanently)
+	})
 
 	// Health check endpoint
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+
+	// Metrics endpoint
+	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 
 	// Swagger documentation
 	r.Get("/swagger/*", func(w http.ResponseWriter, r *http.Request) {
@@ -599,17 +675,44 @@ func runServer(cmd *cobra.Command, args []string) {
 		)(w, r)
 	})
 
-	// Static API routes
-	r.Post("/api/invoke", handler.InvokeHandler)
-	r.Post("/api/evaluate", handler.EvaluateHandler)
+	// Chaincode Playground UI
+	r.Get("/playground", func(w http.ResponseWriter, r *http.Request) {
+		content, err := playgroundHTML.ReadFile("docs/custom-swagger.html")
+		if err != nil {
+			http.Error(w, "Failed to serve playground HTML", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(content)
+	})
+
+	// Swagger Index HTML
+	r.Get("/swagger/index.html", func(w http.ResponseWriter, r *http.Request) {
+		content, err := swaggerIndexHTML.ReadFile("docs/swagger-index.html")
+		if err != nil {
+			http.Error(w, "Failed to serve swagger index HTML", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(content)
+	})
+
+	// API routes
+	r.Route("/api", func(r chi.Router) {
+		r.Post("/invoke", handler.InvokeHandler)
+		r.Post("/evaluate", handler.EvaluateHandler)
+		r.Get("/chaincodes", handler.GetChaincodesHandler)
+	})
 
 	// Dynamic chaincode APIs
 	ccAPIServer := NewChaincodeAPIServer(handler, fabricClient, chaincodes)
-	r.Mount("/api", ccAPIServer.router)
+	r.Mount("/api/chaincodes", ccAPIServer.router)
 
 	// Swagger index for all chaincodes
 	r.Get("/swagger/index.json", func(w http.ResponseWriter, r *http.Request) {
 		var chaincodeDocs []map[string]string
+		log.Printf("Generating Swagger index for %d chaincodes: %v", len(chaincodes), chaincodes)
+
 		for _, cc := range chaincodes {
 			chaincodeDocs = append(chaincodeDocs, map[string]string{
 				"name":            cc,
@@ -617,16 +720,57 @@ func runServer(cmd *cobra.Command, args []string) {
 				"contracts_index": "/swagger/" + cc + "/index.json",
 			})
 		}
+
+		log.Printf("Generated %d chaincode docs", len(chaincodeDocs))
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(chaincodeDocs)
 	})
 
+	// Debug endpoint to check chaincode configuration
+	r.Get("/debug/chaincodes", func(w http.ResponseWriter, r *http.Request) {
+		debugInfo := map[string]interface{}{
+			"chaincodes":       chaincodes,
+			"chaincodes_count": len(chaincodes),
+			"server_time":      time.Now().Format(time.RFC3339),
+			"endpoints": map[string]string{
+				"swagger_index": "/swagger/index.json",
+				"playground":    "/playground",
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(debugInfo)
+	})
+
+	// Debug endpoint to check embedded files
+	r.Get("/debug/embedded", func(w http.ResponseWriter, r *http.Request) {
+		playgroundContent, playgroundErr := playgroundHTML.ReadFile("docs/custom-swagger.html")
+		swaggerContent, swaggerErr := swaggerIndexHTML.ReadFile("docs/swagger-index.html")
+
+		debugInfo := map[string]interface{}{
+			"embedded_files": map[string]interface{}{
+				"playground": map[string]interface{}{
+					"accessible": playgroundErr == nil,
+					"size":       len(playgroundContent),
+					"error":      playgroundErr,
+				},
+				"swagger_index": map[string]interface{}{
+					"accessible": swaggerErr == nil,
+					"size":       len(swaggerContent),
+					"error":      swaggerErr,
+				},
+			},
+			"server_time": time.Now().Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(debugInfo)
+	})
 	// Swagger contract index for each chaincode
 	for _, cc := range chaincodes {
 		chaincode := cc // capture range variable
 		r.Get("/swagger/"+chaincode+"/index.json", func(w http.ResponseWriter, r *http.Request) {
 			meta, err := fetchChaincodeMetadataForSwagger(chaincode)
 			if err != nil || meta == nil {
+				fmt.Println("Error fetching chaincode metadata:", err)
 				w.WriteHeader(http.StatusNotFound)
 				w.Write([]byte("{}"))
 				return

@@ -1,199 +1,191 @@
-# Hyperledger Fabric API
+# Hyperledger Fabric API Plugin
 
-This is a REST API service that provides endpoints to interact with a Hyperledger Fabric network using the fabric-gateway library.
+A dynamic API server for Hyperledger Fabric networks that automatically generates REST endpoints for chaincode functions.
 
 ## Features
 
-- Invoke transactions on the blockchain
-- Evaluate transactions (queries) without writing to the blockchain
-- Multi-peer support with random peer selection for load balancing
-- CLI-based configuration
-- Chi router for efficient HTTP routing
-- Proper error handling and JSON responses
+- **Dynamic API Generation**: Automatically creates REST endpoints for chaincode functions
+- **Swagger Documentation**: Interactive API documentation with operation IDs
+- **Chaincode Playground**: Interactive testing environment for chaincode functions
+- **Metrics & Monitoring**: Built-in Prometheus metrics collection
+- **TLS Support**: Secure communication with Fabric network
+- **Contract Support**: Handles both default and named contracts
 
-## Prerequisites
+## Quick Start
 
-- Go 1.19 or later
-- Access to a Hyperledger Fabric network
-- Valid certificates and private keys for authentication
+### Prerequisites
 
-## Installation
+- Go 1.23.4 or later
+- Hyperledger Fabric network running
+- Client certificates and private keys
+- Chaincode installed and instantiated
 
-```bash
-go get github.com/kfsoftware/chainlaunch-plugin-hlf
-```
-
-## Usage
-
-### Starting the Server
-
-The server requires several parameters to connect to your Fabric network. You can specify multiple peers for load balancing:
+### Installation
 
 ```bash
-./plugin-hlf-api serve \
-  --port 8080 \
-  --mspid "Org1MSP" \
-  --cert "/path/to/cert.pem" \
-  --key "/path/to/key.pem" \
-  --peers "localhost:7051,localhost:8051,localhost:9051" \
-  --tlscerts "/path/to/peer1-tls.pem,/path/to/peer2-tls.pem,/path/to/peer3-tls.pem" \
-  --channel "mychannel" \
-  --chaincode "basic"
+git clone <repository>
+cd plugin-hlf-api
+go mod download
+go build -o hlf-plugin-api .
 ```
 
-The API will automatically distribute requests across the configured peers using random selection.
+### Configuration
 
-### Configuration Parameters
+Set required environment variables:
 
-- `--port`: Port to run the API server (default: 8080)
-- `--mspid`: MSP ID of the organization
-- `--cert`: Path to the client certificate
-- `--key`: Path to the client private key
-- `--peers`: Comma-separated list of peer endpoints (host:port)
-- `--tlscerts`: Comma-separated list of paths to peer TLS certificates (one per peer)
-- `--channel`: Channel name
-- `--chaincode`: Chaincode name
-
-Note: The number of peer endpoints must match the number of TLS certificates provided.
-
-### API Endpoints
-
-#### Invoke Transaction
-
-```http
-POST /api/invoke
-Content-Type: application/json
-
-{
-  "chaincode_name": "basic",
-  "function": "CreateAsset",
-  "args": ["asset1", "blue", "5", "tom", "100"]
-}
+```bash
+export FABRIC_MSPID="Org1MSP"
+export FABRIC_CERT_PATH="/path/to/client.crt"
+export FABRIC_KEY_PATH="/path/to/client.key"
+export FABRIC_PEERS="peer0.org1.example.com:7051,peer1.org1.example.com:7051"
+export FABRIC_TLS_CERTS="/path/to/peer0.crt,/path/to/peer1.crt"
+export FABRIC_CHANNEL="mychannel"
+export PORT_API="8180"
 ```
 
-#### Evaluate Transaction (Query)
+### Running the Server
 
-```http
-POST /api/evaluate
-Content-Type: application/json
-
-{
-  "chaincode_name": "basic",
-  "function": "GetAllAssets",
-  "args": []
-}
+```bash
+./hlf-plugin-api serve \
+  --mspid Org1MSP \
+  --cert /path/to/client.crt \
+  --key /path/to/client.key \
+  --peers peer0.org1.example.com:7051,peer1.org1.example.com:7051 \
+  --tlscerts /path/to/peer0.crt,/path/to/peer1.crt \
+  --channel mychannel \
+  --chaincodes basic,asset \
+  --port 8180
 ```
 
-### Response Format
+## API Endpoints
 
-Success Response:
-```json
-{
-  "status": "success",
-  "result": "transaction result here"
-}
+### Core Endpoints
+
+- `POST /api/invoke` - Invoke chaincode transaction
+- `POST /api/evaluate` - Evaluate chaincode function (read-only)
+- `GET /api/chaincodes` - List available chaincodes
+
+### Dynamic Chaincode Endpoints
+
+For each chaincode, the server automatically generates:
+
+- `POST /api/chaincodes/{chaincode}/invoke` - Generic invoke
+- `POST /api/chaincodes/{chaincode}/evaluate` - Generic evaluate
+- `POST /api/chaincodes/{chaincode}/{contract}/{function}` - Specific function calls
+
+### Swagger Documentation
+
+- `/swagger/` - Interactive API documentation
+- `/swagger/index.json` - List of available chaincodes
+- `/swagger/{chaincode}.json` - Chaincode-specific API spec
+- `/swagger/index.html` - Traditional Swagger interface
+
+### Debug Endpoints
+
+- `/debug/chaincodes` - Check chaincode configuration
+- `/debug/embedded` - Verify embedded HTML files
+
+## 🎮 Chaincode Playground
+
+The Chaincode Playground provides an interactive testing environment for your chaincode functions.
+
+### Access the Playground
+
+The playground is now embedded in the binary and accessible at multiple endpoints:
+
+- **Root URL**: `http://localhost:8180/` (redirects to playground)
+- **Playground**: `http://localhost:8180/playground`
+- **Swagger Index**: `http://localhost:8180/swagger/index.html`
+
+### Features
+
+- **Chaincode Selection**: Dropdown to select from available chaincodes
+- **Interactive Testing**: Use Swagger UI's "Try it out" feature
+- **Real-time Status**: Monitor operation status and results
+- **Metadata Viewing**: Explore chaincode contracts and functions
+- **Request Logging**: Debug API calls with console logging
+
+### How to Use
+
+1. **Select a Chaincode**: Choose from the dropdown menu
+2. **Browse Functions**: View available endpoints in the Swagger UI
+3. **Test Functions**: Use "Try it out" to execute chaincode functions
+4. **Monitor Results**: Check status updates and response logs
+
+### Testing Modes
+
+- **Evaluate Mode** (`mode=evaluate`): Read-only operations, no blockchain changes
+- **Submit Mode** (`mode=submit`): Write operations, creates blockchain transactions
+
+### Example Usage
+
+```bash
+# Start the server with chaincodes
+./hlf-plugin-api serve --chaincodes basic,asset ...
+
+# Access the playground
+open http://localhost:8180/playground
+
+# Select a chaincode and test functions interactively
 ```
 
-Error Response:
-```json
-{
-  "status": "error",
-  "error": "error message here"
-}
-```
+## Operation IDs
 
-## Load Balancing
+Each endpoint has a unique operation ID following camelCase convention:
 
-The API implements a random peer selection strategy for both invoke and evaluate transactions. This helps distribute the load across all available peers in the network. Each request will be randomly assigned to one of the configured peers.
+- **Contract functions**: `{chaincode}{contract}{function}` (e.g., `basicAssetGetAllAssets`)
+- **Generic operations**: `{chaincode}Invoke`, `{chaincode}Evaluate`
+- **API handlers**: `invokeChaincode`, `evaluateChaincode`, `getChaincodes`
+
+## Metrics
+
+The server exposes Prometheus metrics at `/metrics`:
+
+- HTTP request metrics
+- Chaincode operation metrics
+- Transaction success/failure rates
+- Response time histograms
 
 ## Development
 
-To build the project:
+### Embedded Assets
+
+The server now embeds all necessary HTML files into the binary:
+
+- **Chaincode Playground**: `docs/custom-swagger.html` - Interactive testing environment
+- **Swagger Index**: `docs/swagger-index.html` - Traditional Swagger interface
+
+This means:
+- ✅ **No external files needed** - Everything is self-contained
+- ✅ **Easier deployment** - Single binary with all assets
+- ✅ **Better portability** - Works in any environment
+- ✅ **Version consistency** - HTML always matches the binary version
+
+### Project Structure
+
+```
+.
+├── main.go                 # Main server and routing
+├── pkg/
+│   ├── api/               # HTTP handlers
+│   ├── fabric/            # Fabric client
+│   └── metrics/           # Metrics collection
+├── docs/                  # Swagger documentation
+└── README.md
+```
+
+### Building
 
 ```bash
-go build -o plugin-hlf-api
+go build -o hlf-plugin-api .
 ```
 
-## Docker Support
-
-### Building the Docker Image
-
-Build the Docker image using:
+### Testing
 
 ```bash
-docker build -t fabric-api:latest .
+go test ./...
 ```
-
-### Running with Docker
-
-The API can be run in a Docker container. You'll need to mount your certificates and private keys into the container:
-
-```bash
-docker run -d \
-  --name fabric-api \
-  -p 8080:8080 \
-  -v /path/to/certs:/app/crypto \
-  fabric-api:latest \
-  serve \
-  --mspid "Org1MSP" \
-  --cert "/app/crypto/cert.pem" \
-  --key "/app/crypto/key.pem" \
-  --peers "peer1:7051,peer2:7051,peer3:7051" \
-  --tlscerts "/app/crypto/peer1-tls.pem,/app/crypto/peer2-tls.pem,/app/crypto/peer3-tls.pem" \
-  --channel "mychannel" \
-  --chaincode "basic"
-```
-
-### Environment Variables
-
-You can also configure the API using environment variables:
-
-```bash
-docker run -d \
-  --name fabric-api \
-  -p 8080:8080 \
-  -v /path/to/certs:/app/crypto \
-  -e FABRIC_MSPID="Org1MSP" \
-  -e FABRIC_CERT_PATH="/app/crypto/cert.pem" \
-  -e FABRIC_KEY_PATH="/app/crypto/key.pem" \
-  -e FABRIC_PEERS="peer1:7051,peer2:7051,peer3:7051" \
-  -e FABRIC_TLS_CERTS="/app/crypto/peer1-tls.pem,/app/crypto/peer2-tls.pem,/app/crypto/peer3-tls.pem" \
-  -e FABRIC_CHANNEL="mychannel" \
-  -e FABRIC_CHAINCODE="basic" \
-  fabric-api:latest
-```
-
-### Docker Compose Example
-
-Here's an example docker-compose.yml for running the API:
-
-```yaml
-version: '3.8'
-services:
-  fabric-api:
-    build: .
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./crypto:/app/crypto
-    environment:
-      - FABRIC_MSPID=Org1MSP
-      - FABRIC_CERT_PATH=/app/crypto/cert.pem
-      - FABRIC_KEY_PATH=/app/crypto/key.pem
-      - FABRIC_PEERS=peer1:7051,peer2:7051,peer3:7051
-      - FABRIC_TLS_CERTS=/app/crypto/peer1-tls.pem,/app/crypto/peer2-tls.pem,/app/crypto/peer3-tls.pem
-      - FABRIC_CHANNEL=mychannel
-      - FABRIC_CHAINCODE=basic
-    networks:
-      - fabric-network
-
-networks:
-  fabric-network:
-    external: true
-```
-
-Note: Make sure to adjust the volume mounts and network configuration according to your Fabric network setup.
 
 ## License
 
-This project is licensed under the Apache License 2.0. 
+[Add your license information here] 

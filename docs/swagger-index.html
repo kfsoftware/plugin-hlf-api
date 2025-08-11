@@ -55,6 +55,9 @@
         loadSwagger(urlParam);
       } else if (firstUrl) {
         loadSwagger(firstUrl);
+      } else {
+        // Default to custom JSON if no chaincodes available
+        loadSwagger('/swagger/custom.json');
       }
       document.getElementById('chaincode-select').addEventListener('change', function() {
         loadSwagger(this.value);
