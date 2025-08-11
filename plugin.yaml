@@ -19,7 +19,7 @@ spec:
             version: '2.2'
             services:
               app:
-                image: ghcr.io/kfsoftware/plugin-hlf-api:main-9e27cb5
+                image:   ghcr.io/kfsoftware/plugin-hlf-api:0d1c5a9
                 command: 
                   - serve
                   - --mspid={{ .parameters.key.MspID }}
@@ -60,6 +60,189 @@ spec:
                 description: The port to use for the API
         required: []
 
+    metrics:
+        enabled: true
+        endpoint: "/metrics"
+        scrape_interval: "15s"
+
+        ui_dashboards:
+            - name: "Transaction Overview"
+              description: "Overview of transaction metrics and performance"
+              refresh_interval: "30s"
+              panels:
+                - title: "Transaction Count"
+                  metric: "hlf_transactions_total"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "Transaction Duration"
+                  metric: "hlf_transaction_duration_seconds"
+                  chart_type: "histogram"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "Error Rate"
+                  metric: "hlf_error_rate"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "Transaction Throughput"
+                  metric: "hlf_transaction_throughput_tps"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+
+            - name: "Network Health"
+              description: "Network connectivity and health metrics"
+              refresh_interval: "15s"
+              panels:
+                - title: "Peer Connectivity"
+                  metric: "hlf_peer_connectivity_status"
+                  chart_type: "gauge"
+                  time_range: "5m"
+                  refresh_interval: "15s"
+                
+                - title: "Network Health Status"
+                  metric: "hlf_network_health_status"
+                  chart_type: "gauge"
+                  time_range: "5m"
+                  refresh_interval: "15s"
+                
+                - title: "Certificate Expiration"
+                  metric: "hlf_certificate_days_until_expiration"
+                  chart_type: "line"
+                  time_range: "24h"
+                  refresh_interval: "1h"
+                
+                - title: "Peer Response Time"
+                  metric: "hlf_peer_response_time_seconds"
+                  chart_type: "histogram"
+                  time_range: "15m"
+                  refresh_interval: "30s"
+
+            - name: "API Performance"
+              description: "API endpoint performance and usage metrics"
+              refresh_interval: "30s"
+              panels:
+                - title: "HTTP Request Rate"
+                  metric: "http_requests_total"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "API Endpoint Latency"
+                  metric: "hlf_api_endpoint_latency_seconds"
+                  chart_type: "histogram"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "API Success Rate"
+                  metric: "hlf_api_endpoint_success_rate"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "Request Duration"
+                  metric: "http_request_duration_seconds"
+                  chart_type: "histogram"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+
+            - name: "System Resources"
+              description: "System resource usage and performance"
+              refresh_interval: "30s"
+              panels:
+                - title: "Memory Usage"
+                  metric: "hlf_memory_usage_bytes"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "CPU Usage"
+                  metric: "hlf_cpu_usage_percentage"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "Transaction Queue Size"
+                  metric: "hlf_transaction_queue_size"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+                
+                - title: "Queue Latency"
+                  metric: "hlf_transaction_queue_latency_seconds"
+                  chart_type: "histogram"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+
+            - name: "Channel & Chaincode"
+              description: "Channel and chaincode specific metrics"
+              refresh_interval: "1m"
+              panels:
+                - title: "Channel Block Height"
+                  metric: "hlf_channel_block_height"
+                  chart_type: "line"
+                  time_range: "6h"
+                  refresh_interval: "1m"
+                
+                - title: "Channel Transaction Count"
+                  metric: "hlf_channel_transaction_count"
+                  chart_type: "line"
+                  time_range: "6h"
+                  refresh_interval: "1m"
+                
+                - title: "Active Chaincodes"
+                  metric: "hlf_active_chaincodes"
+                  chart_type: "gauge"
+                  time_range: "5m"
+                  refresh_interval: "30s"
+                
+                - title: "Chaincode Operations"
+                  metric: "hlf_chaincode_operations_total"
+                  chart_type: "line"
+                  time_range: "1h"
+                  refresh_interval: "30s"
+
+        alerts:
+            - name: "High Error Rate"
+              description: "Alert when error rate exceeds threshold"
+              condition: "hlf_error_rate > 5"
+              severity: "warning"
+              duration: "5m"
+            
+            - name: "High Transaction Duration"
+              description: "Alert when transaction duration is too high"
+              condition: "hlf_transaction_duration_seconds > 5"
+              severity: "warning"
+              duration: "2m"
+            
+            - name: "Peer Disconnected"
+              description: "Alert when peer connectivity is lost"
+              condition: "hlf_peer_connectivity_status == 0"
+              severity: "critical"
+              duration: "1m"
+            
+            - name: "Certificate Expiring Soon"
+              description: "Alert when certificate expires within 30 days"
+              condition: "hlf_certificate_days_until_expiration < 30"
+              severity: "warning"
+              duration: "1h"
+            
+            - name: "High Memory Usage"
+              description: "Alert when memory usage is high"
+              condition: "hlf_memory_usage_bytes > 1073741824"
+              severity: "warning"
+              duration: "5m"
+            
+            - name: "High CPU Usage"
+              description: "Alert when CPU usage is high"
+              condition: "hlf_cpu_usage_percentage > 80"
+              severity: "warning"
+              duration: "5m"
+
     documentation:
         readme: |
             # Hyperledger Fabric API Plugin
@@ -72,6 +255,7 @@ spec:
             - TLS certificate management
             - Chaincode query and invoke operations
             - Channel management
+            - Comprehensive metrics and monitoring
 
             ## Prerequisites
             - A running Hyperledger Fabric network
@@ -93,6 +277,32 @@ spec:
             - `POST /api/v1/invoke`: Invoke chaincode
             - `GET /api/v1/channel`: Get channel information
             - `GET /api/v1/health`: Health check endpoint
+            - `GET /metrics`: Prometheus metrics endpoint
+
+            ## Metrics and Monitoring
+            The plugin exposes comprehensive metrics at `/metrics` endpoint including:
+            - Transaction metrics (count, duration, status)
+            - HTTP request metrics
+            - Chaincode operation metrics
+            - Peer connectivity metrics
+            - Certificate expiration metrics
+            - Performance and resource metrics
+            - Network health metrics
+
+            ## Dashboards
+            The plugin provides pre-configured dashboards for:
+            - Transaction Overview
+            - Network Health
+            - API Performance
+            - System Resources
+
+            ## Alerts
+            The plugin includes alerting rules for:
+            - High error rates
+            - Slow transactions
+            - Peer disconnections
+            - Certificate expiration
+            - Resource usage
 
         examples:
             - name: "Basic Chaincode Query"
