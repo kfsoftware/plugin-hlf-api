@@ -3,15 +3,15 @@ kind: Plugin
 metadata:
     name: hlf-plugin-api
     version: '1.0'
-    description: "Hyperledger Fabric API plugin that provides a REST API interface to interact with Fabric networks"
-    author: "ChainLaunch Team"
+    description: 'Hyperledger Fabric API plugin that provides a REST API interface to interact with Fabric networks'
+    author: 'ChainLaunch Team'
     tags:
         - fabric
         - api
         - rest
         - chaincode
-    repository: "https://github.com/kfsoftware/plugin-hlf-api"
-    license: "Apache-2.0"
+    repository: 'https://github.com/kfsoftware/plugin-hlf-api'
+    license: 'Apache-2.0'
 
 spec:
     dockerCompose:
@@ -19,7 +19,7 @@ spec:
             version: '2.2'
             services:
               app:
-                image:   ghcr.io/kfsoftware/plugin-hlf-api:0d1c5a9
+                image:   ghcr.io/kfsoftware/plugin-hlf-api:5ef1ea1
                 command: 
                   - serve
                   - --mspid={{ .parameters.key.MspID }}
@@ -61,187 +61,303 @@ spec:
         required: []
 
     metrics:
-        enabled: true
-        endpoint: "/metrics"
-        scrape_interval: "15s"
-
-        ui_dashboards:
-            - name: "Transaction Overview"
-              description: "Overview of transaction metrics and performance"
-              refresh_interval: "30s"
+        endpoints:
+            - service: app
+              port: '{{ .parameters.port }}'
+              path: /metrics
+              interval: 15s
+              jobName: hlf-api-metrics
+        dashboard:
+            - name: 'Go Runtime'
+              description: 'Go runtime and garbage collection metrics'
+              refresh_interval: '30s'
               panels:
-                - title: "Transaction Count"
-                  metric: "hlf_transactions_total"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "Transaction Duration"
-                  metric: "hlf_transaction_duration_seconds"
-                  chart_type: "histogram"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "Error Rate"
-                  metric: "hlf_error_rate"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "Transaction Throughput"
-                  metric: "hlf_transaction_throughput_tps"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
+                  - title: 'GC Duration (quantiles)'
+                    metric: 'go_gc_duration_seconds'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                    legend: 'quantile'
+                  - title: 'GC Duration (sum/count)'
+                    metric: 'go_gc_duration_seconds_sum'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'GC Cycles'
+                    metric: 'go_gc_duration_seconds_count'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'GOGC Percent'
+                    metric: 'go_gc_gogc_percent'
+                    chart_type: 'gauge'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Go Memory Limit'
+                    metric: 'go_gc_gomemlimit_bytes'
+                    chart_type: 'gauge'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Goroutines'
+                    metric: 'go_goroutines'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Go Info'
+                    metric: 'go_info'
+                    chart_type: 'table'
+                    time_range: '1h'
+                    refresh_interval: '30s'
 
-            - name: "Network Health"
-              description: "Network connectivity and health metrics"
-              refresh_interval: "15s"
+            - name: 'Go Memory'
+              description: 'Go memory statistics'
+              refresh_interval: '30s'
               panels:
-                - title: "Peer Connectivity"
-                  metric: "hlf_peer_connectivity_status"
-                  chart_type: "gauge"
-                  time_range: "5m"
-                  refresh_interval: "15s"
-                
-                - title: "Network Health Status"
-                  metric: "hlf_network_health_status"
-                  chart_type: "gauge"
-                  time_range: "5m"
-                  refresh_interval: "15s"
-                
-                - title: "Certificate Expiration"
-                  metric: "hlf_certificate_days_until_expiration"
-                  chart_type: "line"
-                  time_range: "24h"
-                  refresh_interval: "1h"
-                
-                - title: "Peer Response Time"
-                  metric: "hlf_peer_response_time_seconds"
-                  chart_type: "histogram"
-                  time_range: "15m"
-                  refresh_interval: "30s"
+                  - title: 'Heap Allocated'
+                    metric: 'go_memstats_alloc_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Total Allocated'
+                    metric: 'go_memstats_alloc_bytes_total'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Heap Objects'
+                    metric: 'go_memstats_heap_objects'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Heap In Use'
+                    metric: 'go_memstats_heap_inuse_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Heap Idle'
+                    metric: 'go_memstats_heap_idle_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Heap Released'
+                    metric: 'go_memstats_heap_released_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Heap System'
+                    metric: 'go_memstats_heap_sys_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Next GC Target'
+                    metric: 'go_memstats_next_gc_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'GC System Bytes'
+                    metric: 'go_memstats_gc_sys_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Other System Bytes'
+                    metric: 'go_memstats_other_sys_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Stack In Use'
+                    metric: 'go_memstats_stack_inuse_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Stack System'
+                    metric: 'go_memstats_stack_sys_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Total System Bytes'
+                    metric: 'go_memstats_sys_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
 
-            - name: "API Performance"
-              description: "API endpoint performance and usage metrics"
-              refresh_interval: "30s"
+            - name: 'Go Alloc/Frees'
+              description: 'Go heap allocations and frees'
+              refresh_interval: '30s'
               panels:
-                - title: "HTTP Request Rate"
-                  metric: "http_requests_total"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "API Endpoint Latency"
-                  metric: "hlf_api_endpoint_latency_seconds"
-                  chart_type: "histogram"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "API Success Rate"
-                  metric: "hlf_api_endpoint_success_rate"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "Request Duration"
-                  metric: "http_request_duration_seconds"
-                  chart_type: "histogram"
-                  time_range: "1h"
-                  refresh_interval: "30s"
+                  - title: 'Mallocs Total'
+                    metric: 'go_memstats_mallocs_total'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Frees Total'
+                    metric: 'go_memstats_frees_total'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Buck Hash Sys'
+                    metric: 'go_memstats_buck_hash_sys_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'MCache In Use'
+                    metric: 'go_memstats_mcache_inuse_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'MCache Sys'
+                    metric: 'go_memstats_mcache_sys_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'MSpan In Use'
+                    metric: 'go_memstats_mspan_inuse_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'MSpan Sys'
+                    metric: 'go_memstats_mspan_sys_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
 
-            - name: "System Resources"
-              description: "System resource usage and performance"
-              refresh_interval: "30s"
+            - name: 'Go Scheduler & Threads'
+              description: 'Go scheduler and thread metrics'
+              refresh_interval: '30s'
               panels:
-                - title: "Memory Usage"
-                  metric: "hlf_memory_usage_bytes"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "CPU Usage"
-                  metric: "hlf_cpu_usage_percentage"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "Transaction Queue Size"
-                  metric: "hlf_transaction_queue_size"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
-                
-                - title: "Queue Latency"
-                  metric: "hlf_transaction_queue_latency_seconds"
-                  chart_type: "histogram"
-                  time_range: "1h"
-                  refresh_interval: "30s"
+                  - title: 'GOMAXPROCS'
+                    metric: 'go_sched_gomaxprocs_threads'
+                    chart_type: 'gauge'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'OS Threads'
+                    metric: 'go_threads'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
 
-            - name: "Channel & Chaincode"
-              description: "Channel and chaincode specific metrics"
-              refresh_interval: "1m"
+            - name: 'Process'
+              description: 'Process-level resource metrics'
+              refresh_interval: '30s'
               panels:
-                - title: "Channel Block Height"
-                  metric: "hlf_channel_block_height"
-                  chart_type: "line"
-                  time_range: "6h"
-                  refresh_interval: "1m"
-                
-                - title: "Channel Transaction Count"
-                  metric: "hlf_channel_transaction_count"
-                  chart_type: "line"
-                  time_range: "6h"
-                  refresh_interval: "1m"
-                
-                - title: "Active Chaincodes"
-                  metric: "hlf_active_chaincodes"
-                  chart_type: "gauge"
-                  time_range: "5m"
-                  refresh_interval: "30s"
-                
-                - title: "Chaincode Operations"
-                  metric: "hlf_chaincode_operations_total"
-                  chart_type: "line"
-                  time_range: "1h"
-                  refresh_interval: "30s"
+                  - title: 'CPU Seconds Total'
+                    metric: 'process_cpu_seconds_total'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Max FDs'
+                    metric: 'process_max_fds'
+                    chart_type: 'gauge'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Open FDs'
+                    metric: 'process_open_fds'
+                    chart_type: 'gauge'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Resident Memory'
+                    metric: 'process_resident_memory_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Virtual Memory'
+                    metric: 'process_virtual_memory_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Virtual Memory Max'
+                    metric: 'process_virtual_memory_max_bytes'
+                    chart_type: 'gauge'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Start Time'
+                    metric: 'process_start_time_seconds'
+                    chart_type: 'gauge'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Network Receive Bytes'
+                    metric: 'process_network_receive_bytes_total'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Network Transmit Bytes'
+                    metric: 'process_network_transmit_bytes_total'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
 
-        alerts:
-            - name: "High Error Rate"
-              description: "Alert when error rate exceeds threshold"
-              condition: "hlf_error_rate > 5"
-              severity: "warning"
-              duration: "5m"
-            
-            - name: "High Transaction Duration"
-              description: "Alert when transaction duration is too high"
-              condition: "hlf_transaction_duration_seconds > 5"
-              severity: "warning"
-              duration: "2m"
-            
-            - name: "Peer Disconnected"
-              description: "Alert when peer connectivity is lost"
-              condition: "hlf_peer_connectivity_status == 0"
-              severity: "critical"
-              duration: "1m"
-            
-            - name: "Certificate Expiring Soon"
-              description: "Alert when certificate expires within 30 days"
-              condition: "hlf_certificate_days_until_expiration < 30"
-              severity: "warning"
-              duration: "1h"
-            
-            - name: "High Memory Usage"
-              description: "Alert when memory usage is high"
-              condition: "hlf_memory_usage_bytes > 1073741824"
-              severity: "warning"
-              duration: "5m"
-            
-            - name: "High CPU Usage"
-              description: "Alert when CPU usage is high"
-              condition: "hlf_cpu_usage_percentage > 80"
-              severity: "warning"
-              duration: "5m"
+            - name: 'Prometheus Handler'
+              description: 'Prometheus scrape handler metrics'
+              refresh_interval: '30s'
+              panels:
+                  - title: 'Requests In Flight'
+                    metric: 'promhttp_metric_handler_requests_in_flight'
+                    chart_type: 'gauge'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Requests Total'
+                    metric: 'promhttp_metric_handler_requests_total'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+
+            - name: 'API Performance'
+              description: 'API endpoint performance and usage metrics'
+              refresh_interval: '30s'
+              panels:
+                  - title: 'HTTP Request Rate'
+                    metric: 'http_requests_total'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'API Endpoint Latency'
+                    metric: 'hlf_api_endpoint_latency_seconds'
+                    chart_type: 'histogram'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Request Duration'
+                    metric: 'http_request_duration_seconds'
+                    chart_type: 'histogram'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+
+            - name: 'System Resources'
+              description: 'System resource usage and performance'
+              refresh_interval: '30s'
+              panels:
+                  - title: 'Memory Usage'
+                    metric: 'hlf_memory_usage_bytes'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'CPU Usage'
+                    metric: 'hlf_cpu_usage_percentage'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+                  - title: 'Transaction Queue Size'
+                    metric: 'hlf_transaction_queue_size'
+                    chart_type: 'line'
+                    time_range: '1h'
+                    refresh_interval: '30s'
+
+            - name: 'Network Health'
+              description: 'Network connectivity and health metrics'
+              refresh_interval: '15s'
+              panels:
+                  - title: 'Network Health Status'
+                    metric: 'hlf_network_health_status'
+                    chart_type: 'gauge'
+                    time_range: '5m'
+                    refresh_interval: '15s'
+
+            - name: 'Chaincode'
+              description: 'Chaincode and channel metrics'
+              refresh_interval: '1m'
+              panels:
+                  - title: 'Active Chaincodes'
+                    metric: 'hlf_active_chaincodes'
+                    chart_type: 'gauge'
+                    time_range: '5m'
+                    refresh_interval: '30s'
 
     documentation:
         readme: |
@@ -305,150 +421,150 @@ spec:
             - Resource usage
 
         examples:
-            - name: "Basic Chaincode Query"
-              description: "Configure the API to query a basic chaincode"
+            - name: 'Basic Chaincode Query'
+              description: 'Configure the API to query a basic chaincode'
               parameters:
-                key:
-                  MspID: "Org1MSP"
-                  CertPath: "/etc/hyperledger/crypto/peer/cert.pem"
-                  KeyPath: "/etc/hyperledger/crypto/peer/key.pem"
-                channelName: "mychannel"
-                chaincodeName: "mycc"
-                peers:
-                  - ExternalEndpoint: "peer0.org1.example.com:7051"
-                    TLSCACertPath: "/etc/hyperledger/crypto/peer/tls/cert.pem"
-                port: 8080
+                  key:
+                      MspID: 'Org1MSP'
+                      CertPath: '/etc/hyperledger/crypto/peer/cert.pem'
+                      KeyPath: '/etc/hyperledger/crypto/peer/key.pem'
+                  channelName: 'mychannel'
+                  chaincodeName: 'mycc'
+                  peers:
+                      - ExternalEndpoint: 'peer0.org1.example.com:7051'
+                        TLSCACertPath: '/etc/hyperledger/crypto/peer/tls/cert.pem'
+                  port: 8080
 
-            - name: "Multi-Peer Configuration"
-              description: "Configure the API to work with multiple peers for redundancy"
+            - name: 'Multi-Peer Configuration'
+              description: 'Configure the API to work with multiple peers for redundancy'
               parameters:
-                key:
-                  MspID: "Org1MSP"
-                  CertPath: "/etc/hyperledger/crypto/peer/cert.pem"
-                  KeyPath: "/etc/hyperledger/crypto/peer/key.pem"
-                channelName: "mychannel"
-                chaincodeName: "mycc"
-                peers:
-                  - ExternalEndpoint: "peer0.org1.example.com:7051"
-                    TLSCACertPath: "/etc/hyperledger/crypto/peer0/tls/cert.pem"
-                  - ExternalEndpoint: "peer1.org1.example.com:7051"
-                    TLSCACertPath: "/etc/hyperledger/crypto/peer1/tls/cert.pem"
-                port: 8080
+                  key:
+                      MspID: 'Org1MSP'
+                      CertPath: '/etc/hyperledger/crypto/peer/cert.pem'
+                      KeyPath: '/etc/hyperledger/crypto/peer/key.pem'
+                  channelName: 'mychannel'
+                  chaincodeName: 'mycc'
+                  peers:
+                      - ExternalEndpoint: 'peer0.org1.example.com:7051'
+                        TLSCACertPath: '/etc/hyperledger/crypto/peer0/tls/cert.pem'
+                      - ExternalEndpoint: 'peer1.org1.example.com:7051'
+                        TLSCACertPath: '/etc/hyperledger/crypto/peer1/tls/cert.pem'
+                  port: 8080
 
         troubleshooting:
-            - problem: "API cannot connect to peers"
+            - problem: 'API cannot connect to peers'
               solution: |
-                ### Quick Fix
-                1. Verify peer connectivity:
-                   ```bash
-                   docker-compose exec app ping peer0.org1.example.com
-                   ```
-                2. Check TLS certificates:
-                   ```bash
-                   ls -la /etc/hyperledger/crypto/peer/tls/
-                   ```
-                3. Validate peer endpoints:
-                   ```bash
-                   cat /etc/hyperledger/config/connection-profile.yaml
-                   ```
+                  ### Quick Fix
+                  1. Verify peer connectivity:
+                     ```bash
+                     docker-compose exec app ping peer0.org1.example.com
+                     ```
+                  2. Check TLS certificates:
+                     ```bash
+                     ls -la /etc/hyperledger/crypto/peer/tls/
+                     ```
+                  3. Validate peer endpoints:
+                     ```bash
+                     cat /etc/hyperledger/config/connection-profile.yaml
+                     ```
 
-                ### Common Issues
-                - Invalid TLS certificates
-                - Network connectivity problems
-                - Incorrect peer endpoints
-                - Firewall blocking access
+                  ### Common Issues
+                  - Invalid TLS certificates
+                  - Network connectivity problems
+                  - Incorrect peer endpoints
+                  - Firewall blocking access
 
-                ### Resolution Steps
-                1. **TLS Certificate Issues**
-                   - Verify certificate paths
-                   - Check certificate validity
-                   - Ensure proper permissions
+                  ### Resolution Steps
+                  1. **TLS Certificate Issues**
+                     - Verify certificate paths
+                     - Check certificate validity
+                     - Ensure proper permissions
 
-                2. **Network Issues**
-                   - Check DNS resolution
-                   - Verify network policies
-                   - Test peer connectivity
+                  2. **Network Issues**
+                     - Check DNS resolution
+                     - Verify network policies
+                     - Test peer connectivity
 
-                3. **Configuration Issues**
-                   - Validate connection profile
-                   - Check MSP configuration
-                   - Verify channel configuration
-              description: "This issue occurs when the API cannot establish connections to the Fabric peer nodes."
+                  3. **Configuration Issues**
+                     - Validate connection profile
+                     - Check MSP configuration
+                     - Verify channel configuration
+              description: 'This issue occurs when the API cannot establish connections to the Fabric peer nodes.'
 
-            - problem: "Chaincode operations failing"
+            - problem: 'Chaincode operations failing'
               solution: |
-                ### Quick Fix
-                1. Verify chaincode status:
-                   ```bash
-                   peer chaincode list --instantiated -C mychannel
-                   ```
-                2. Check chaincode logs:
-                   ```bash
-                   docker-compose logs app | grep chaincode
-                   ```
-                3. Validate chaincode policy:
-                   ```bash
-                   peer chaincode query -C mychannel -n mycc -c '{"Args":["query","a"]}'
-                   ```
+                  ### Quick Fix
+                  1. Verify chaincode status:
+                     ```bash
+                     peer chaincode list --instantiated -C mychannel
+                     ```
+                  2. Check chaincode logs:
+                     ```bash
+                     docker-compose logs app | grep chaincode
+                     ```
+                  3. Validate chaincode policy:
+                     ```bash
+                     peer chaincode query -C mychannel -n mycc -c '{"Args":["query","a"]}'
+                     ```
 
-                ### Common Issues
-                - Chaincode not instantiated
-                - Incorrect chaincode name
-                - Policy violations
-                - Endorsement failures
+                  ### Common Issues
+                  - Chaincode not instantiated
+                  - Incorrect chaincode name
+                  - Policy violations
+                  - Endorsement failures
 
-                ### Resolution Steps
-                1. **Chaincode Installation**
-                   - Verify chaincode is installed
-                   - Check instantiation status
-                   - Validate chaincode version
+                  ### Resolution Steps
+                  1. **Chaincode Installation**
+                     - Verify chaincode is installed
+                     - Check instantiation status
+                     - Validate chaincode version
 
-                2. **Policy Issues**
-                   - Review endorsement policy
-                   - Check organization permissions
-                   - Verify channel configuration
+                  2. **Policy Issues**
+                     - Review endorsement policy
+                     - Check organization permissions
+                     - Verify channel configuration
 
-                3. **Query/Invoke Issues**
-                   - Validate input parameters
-                   - Check chaincode logic
-                   - Review error messages
-              description: "This issue occurs when chaincode operations fail due to various reasons."
+                  3. **Query/Invoke Issues**
+                     - Validate input parameters
+                     - Check chaincode logic
+                     - Review error messages
+              description: 'This issue occurs when chaincode operations fail due to various reasons.'
 
-            - problem: "API server not starting"
+            - problem: 'API server not starting'
               solution: |
-                ### Quick Fix
-                1. Check container logs:
-                   ```bash
-                   docker-compose logs app
-                   ```
-                2. Verify port availability:
-                   ```bash
-                   netstat -tulpn | grep 8080
-                   ```
-                3. Check configuration:
-                   ```bash
-                   docker-compose config
-                   ```
+                  ### Quick Fix
+                  1. Check container logs:
+                     ```bash
+                     docker-compose logs app
+                     ```
+                  2. Verify port availability:
+                     ```bash
+                     netstat -tulpn | grep 8080
+                     ```
+                  3. Check configuration:
+                     ```bash
+                     docker-compose config
+                     ```
 
-                ### Common Issues
-                - Port conflicts
-                - Invalid configuration
-                - Missing dependencies
-                - Permission issues
+                  ### Common Issues
+                  - Port conflicts
+                  - Invalid configuration
+                  - Missing dependencies
+                  - Permission issues
 
-                ### Resolution Steps
-                1. **Port Issues**
-                   - Change port number
-                   - Stop conflicting services
-                   - Check firewall rules
+                  ### Resolution Steps
+                  1. **Port Issues**
+                     - Change port number
+                     - Stop conflicting services
+                     - Check firewall rules
 
-                2. **Configuration Issues**
-                   - Validate parameter values
-                   - Check environment variables
-                   - Review volume mounts
+                  2. **Configuration Issues**
+                     - Validate parameter values
+                     - Check environment variables
+                     - Review volume mounts
 
-                3. **Dependency Issues**
-                   - Verify image availability
-                   - Check network connectivity
-                   - Validate volume permissions
-              description: "This issue occurs when the API server fails to start properly." 
+                  3. **Dependency Issues**
+                     - Verify image availability
+                     - Check network connectivity
+                     - Validate volume permissions
+              description: 'This issue occurs when the API server fails to start properly.'
