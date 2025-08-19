@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Hyperledger Fabric Chaincode Playground</title>
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist/swagger-ui.css" />
+  <style>
+    body { 
+      margin: 0; 
+      padding: 0; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    #topbar { 
+      padding: 1.5em; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    #topbar h1 {
+      margin: 0 0 0.5em 0;
+      font-size: 2em;
+      font-weight: 300;
+    }
+    #topbar p {
+      margin: 0;
+      opacity: 0.9;
+      font-size: 1.1em;
+    }
+    .chaincode-selector {
+      margin-top: 1em;
+      display: flex;
+      gap: 1em;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .chaincode-selector label {
+      font-weight: 500;
+      margin-right: 0.5em;
+    }
+    #chaincode-select {
+      padding: 0.5em;
+      border: none;
+      border-radius: 4px;
+      font-size: 1em;
+      min-width: 200px;
+    }
+    .playground-controls {
+      margin-top: 1em;
+      display: flex;
+      gap: 1em;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 0.5em 1em;
+      border: none;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.2);
+      color: white;
+      cursor: pointer;
+      font-size: 1em;
+      transition: background 0.2s;
+    }
+    .btn:hover {
+      background: rgba(255,255,255,0.3);
+    }
+    .btn.primary {
+      background: #4CAF50;
+    }
+    .btn.primary:hover {
+      background: #45a049;
+    }
+    #status {
+      margin-top: 1em;
+      padding: 0.5em;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.1);
+      font-family: monospace;
+      font-size: 0.9em;
+    }
+    #swagger-ui {
+      margin-top: 1em;
+    }
+    .swagger-ui .topbar {
+      display: none;
+    }
+    .endpoint-info {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 4px;
+      padding: 1em;
+      margin: 1em 0;
+    }
+    .endpoint-info h3 {
+      margin-top: 0;
+      color: #495057;
+    }
+    .endpoint-info code {
+      background: #e9ecef;
+      padding: 0.2em 0.4em;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <h1>🔗 Hyperledger Fabric Chaincode Playground</h1>
+    <p>Interactive testing environment for your chaincode functions</p>
+    
+    <div class="chaincode-selector">
+      <label for="chaincode-select">Select Chaincode:</label>
+      <select id="chaincode-select">
+        <option value="">Loading chaincodes...</option>
+      </select>
+      <button class="btn" id="refresh-btn">🔄 Refresh</button>
+    </div>
+    
+    <div class="playground-controls">
+      <button class="btn primary" id="test-endpoint-btn">🧪 Test Selected Endpoint</button>
+      <button class="btn" id="view-metadata-btn">📋 View Metadata</button>
+      <button class="btn" id="clear-logs-btn">🗑️ Clear Logs</button>
+    </div>
+    
+    <div id="status">Ready to explore chaincodes...</div>
+  </div>
+  
+  <div class="endpoint-info">
+    <h3>🎯 How to Use</h3>
+    <p>
+      <strong>1.</strong> Select a chaincode from the dropdown above<br>
+      <strong>2.</strong> Browse available functions in the Swagger UI below<br>
+      <strong>3.</strong> Use the "Try it out" feature to test functions<br>
+      <strong>4.</strong> Monitor transaction results and logs
+    </p>
+    <p>
+      <strong>Note:</strong> Use <code>mode=evaluate</code> for read-only operations and <code>mode=submit</code> for write operations.
+    </p>
+  </div>
+  
+  <div id="swagger-ui"></div>
+  
+  <script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script>
+  <script>
+    let currentChaincode = null;
+    let swaggerUI = null;
+    
+    // Initialize the playground
+    document.addEventListener('DOMContentLoaded', async () => {
+      await loadChaincodes();
+      setupEventListeners();
+      
+      // Set initial state
+      const swaggerContainer = document.getElementById('swagger-ui');
+      swaggerContainer.innerHTML = `
+        <div style="text-align: center; padding: 2em; color: #666;">
+          <h3>🔍 Welcome to the Chaincode Playground</h3>
+          <p>Select a chaincode from the dropdown above to view its API documentation and test functions.</p>
+        </div>
+      `;
+      
+      updateStatus('Playground initialized. Select a chaincode to begin.');
+    });
+    
+    async function loadChaincodes() {
+      try {
+        const res = await fetch('/swagger/index.json');
+        const chaincodes = await res.json();
+        const select = document.getElementById('chaincode-select');
+        
+        select.innerHTML = '<option value="">Select a chaincode...</option>';
+        chaincodes.forEach(cc => {
+          const opt = document.createElement('option');
+          opt.value = cc.url;
+          opt.textContent = cc.name;
+          select.appendChild(opt);
+        });
+        
+        if (chaincodes.length > 0) {
+          updateStatus(`Found ${chaincodes.length} chaincode(s). Select one to load its API.`);
+        } else {
+          updateStatus('No chaincodes found. Make sure your server is running with chaincodes configured.');
+        }
+      } catch (error) {
+        console.error('Error loading chaincodes:', error);
+        updateStatus('Error loading chaincodes. Check server connection.');
+      }
+    }
+    
+    function setupEventListeners() {
+      // Chaincode selection
+      document.getElementById('chaincode-select').addEventListener('change', function() {
+        console.log('Chaincode selection changed:', this.value);
+        
+        if (this.value) {
+          const chaincodeName = this.value.split('/').pop().replace('.json', '');
+          currentChaincode = chaincodeName;
+          updateStatus(`Loading chaincode: ${chaincodeName} from ${this.value}`);
+          
+          // Load the Swagger specification
+          loadSwagger(this.value);
+        } else {
+          // No chaincode selected, clear the UI
+          currentChaincode = null;
+          if (swaggerUI) {
+            try {
+              swaggerUI.destroy();
+              swaggerUI = null;
+            } catch (e) {
+              console.log('Cleared previous Swagger UI');
+            }
+          }
+          
+          const swaggerContainer = document.getElementById('swagger-ui');
+          swaggerContainer.innerHTML = `
+            <div style="text-align: center; padding: 2em; color: #666;">
+              <h3>🔍 Select a Chaincode</h3>
+              <p>Choose a chaincode from the dropdown above to view its API documentation.</p>
+            </div>
+          `;
+          
+          updateStatus('No chaincode selected. Please choose one from the dropdown.');
+        }
+      });
+      
+      // Refresh button
+      document.getElementById('refresh-btn').addEventListener('click', async () => {
+        updateStatus('Refreshing chaincodes...');
+        await loadChaincodes();
+      });
+      
+      // Test endpoint button
+      document.getElementById('test-endpoint-btn').addEventListener('click', () => {
+        if (currentChaincode) {
+          updateStatus(`Ready to test endpoints for ${currentChaincode}. Use the "Try it out" feature in the Swagger UI below.`);
+        } else {
+          updateStatus('Please select a chaincode first.');
+        }
+      });
+      
+      // View metadata button
+      document.getElementById('view-metadata-btn').addEventListener('click', async () => {
+        if (currentChaincode) {
+          await viewChaincodeMetadata(currentChaincode);
+        } else {
+          updateStatus('Please select a chaincode first.');
+        }
+      });
+      
+      // Clear logs button
+      document.getElementById('clear-logs-btn').addEventListener('click', () => {
+        updateStatus('Logs cleared. Ready for new operations.');
+      });
+    }
+    
+    async function loadSwagger(url) {
+      try {
+        updateStatus(`Loading Swagger specification from: ${url}`);
+        
+        // Clear the previous Swagger UI
+        const swaggerContainer = document.getElementById('swagger-ui');
+        swaggerContainer.innerHTML = '<div style="text-align: center; padding: 2em; color: #666;">Loading...</div>';
+        
+        // Destroy previous instance if it exists
+        if (swaggerUI) {
+          try {
+            swaggerUI.destroy();
+          } catch (e) {
+            console.log('Previous Swagger UI destroyed');
+          }
+          swaggerUI = null;
+        }
+        
+        // Verify the URL is accessible
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Failed to load Swagger spec: ${response.status} ${response.statusText}`);
+        }
+        
+        // Create new Swagger UI instance
+        swaggerUI = SwaggerUIBundle({
+          url: url,
+          dom_id: '#swagger-ui',
+          presets: [SwaggerUIBundle.presets.apis],
+          layout: "BaseLayout",
+          deepLinking: true,
+          showExtensions: true,
+          showCommonExtensions: true,
+          tryItOutEnabled: true,
+          requestInterceptor: (request) => {
+            // Add playground context to requests
+            request.headers['X-Playground-User'] = 'chaincode-playground';
+            return request;
+          },
+          responseInterceptor: (response) => {
+            // Log responses for debugging
+            console.log('API Response:', response);
+            return response;
+          },
+          onComplete: () => {
+            updateStatus(`Swagger UI loaded successfully for: ${url}`);
+            console.log('Swagger UI loaded:', url);
+          },
+          onFailure: (error) => {
+            console.error('Swagger UI failed to load:', error);
+            updateStatus(`Failed to load Swagger UI: ${error.message}`);
+            swaggerContainer.innerHTML = `
+              <div style="text-align: center; padding: 2em; color: #d32f2f;">
+                <h3>❌ Failed to load Swagger specification</h3>
+                <p>Error: ${error.message}</p>
+                <p>URL: ${url}</p>
+                <button class="btn" onclick="location.reload()">🔄 Reload Page</button>
+              </div>
+            `;
+          }
+        });
+        
+      } catch (error) {
+        console.error('Error loading Swagger:', error);
+        updateStatus(`Error loading Swagger: ${error.message}`);
+        
+        const swaggerContainer = document.getElementById('swagger-ui');
+        swaggerContainer.innerHTML = `
+          <div style="text-align: center; padding: 2em; color: #d32f2f;">
+            <h3>❌ Error Loading Swagger</h3>
+            <p>${error.message}</p>
+            <p>URL: ${url}</p>
+            <button class="btn" onclick="location.reload()">🔄 Reload Page</button>
+          </div>
+        `;
+      }
+    }
+    
+    async function viewChaincodeMetadata(chaincodeName) {
+      try {
+        const res = await fetch(`/swagger/${chaincodeName}/index.json`);
+        const metadata = await res.json();
+        
+        let metadataText = `Chaincode: ${chaincodeName}\n`;
+        metadataText += `Available contracts: ${metadata.length}\n\n`;
+        
+        metadata.forEach(contract => {
+          metadataText += `📋 Contract: ${contract.name}\n`;
+          metadataText += `   Title: ${contract.title || 'N/A'}\n`;
+          metadataText += `   URL: ${contract.url}\n\n`;
+        });
+        
+        updateStatus(metadataText);
+      } catch (error) {
+        console.error('Error fetching metadata:', error);
+        updateStatus('Error fetching chaincode metadata.');
+      }
+    }
+    
+    function updateStatus(message) {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = message;
+      statusEl.style.background = message.includes('Error') ? 'rgba(255,0,0,0.1)' : 'rgba(255,255,255,0.1)';
+    }
+    
+    // Add some helpful console messages
+    console.log('🔗 Hyperledger Fabric Chaincode Playground loaded');
+    console.log('💡 Tip: Use the browser console to debug API calls');
+    console.log('🔍 Available global functions: loadChaincodes(), viewChaincodeMetadata(chaincodeName)');
+  </script>
+</body>
+</html>

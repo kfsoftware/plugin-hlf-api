@@ -1,21 +1,35 @@
 package main
 
 import (
+	"context"
+	"embed"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-openapi/spec"
 	_ "github.com/kfsoftware/chainlaunch-plugin-hlf/docs" // This will be generated
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/api"
 	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/fabric"
+	"github.com/kfsoftware/chainlaunch-plugin-hlf/pkg/metrics"
 )
+
+//go:embed docs/custom-swagger.html
+var playgroundHTML embed.FS
+
+//go:embed docs/swagger-index.html
+var swaggerIndexHTML embed.FS
 
 // @title Hyperledger Fabric API
 // @version 1.0
@@ -31,6 +45,7 @@ var (
 	peerEndpoints string
 	tlsCertPaths  string
 	channelName   string
+	chaincodes    []string
 
 	rootCmd  = &cobra.Command{Use: "hlf-api"}
 	serveCmd = &cobra.Command{
@@ -51,6 +66,7 @@ func init() {
 	serveCmd.Flags().StringVar(&peerEndpoints, "peers", getEnvOrDefault("FABRIC_PEERS", ""), "Comma-separated list of peer endpoints (host:port)")
 	serveCmd.Flags().StringVar(&tlsCertPaths, "tlscerts", getEnvOrDefault("FABRIC_TLS_CERTS", ""), "Comma-separated list of paths to the TLS certificates (one per peer)")
 	serveCmd.Flags().StringVar(&channelName, "channel", getEnvOrDefault("FABRIC_CHANNEL", ""), "Channel name")
+	serveCmd.Flags().StringSliceVarP(&chaincodes, "chaincodes", "c", []string{}, "Comma-separated list of chaincodes to inspect and expose as sub-APIs")
 
 	// Mark required flags
 	serveCmd.MarkFlagRequired("mspid")
@@ -69,6 +85,600 @@ func getEnvOrDefault(key, defaultValue string) string {
 	}
 	return defaultValue
 }
+
+// ChaincodeMetadata holds metadata for a chaincode
+type ChaincodeMetadata struct {
+	Name     string
+	Metadata []byte
+}
+
+// ChaincodeAPIServer manages dynamic chaincode APIs
+type ChaincodeAPIServer struct {
+	router          *chi.Mux
+	handler         *api.Handler
+	fabricClient    *fabric.FabricClient
+	chaincodes      []string
+	metadata        map[string]*ChaincodeMetadata
+	reloadTicker    *time.Ticker
+	reloadStop      chan struct{}
+	mu              sync.RWMutex
+	dynamicHandlers map[string]http.HandlerFunc // path -> handler
+}
+
+func NewChaincodeAPIServer(handler *api.Handler, fabricClient *fabric.FabricClient, chaincodes []string) *ChaincodeAPIServer {
+	s := &ChaincodeAPIServer{
+		router:          chi.NewRouter(),
+		handler:         handler,
+		fabricClient:    fabricClient,
+		chaincodes:      chaincodes,
+		metadata:        make(map[string]*ChaincodeMetadata),
+		reloadTicker:    time.NewTicker(60 * time.Second),
+		reloadStop:      make(chan struct{}),
+		dynamicHandlers: make(map[string]http.HandlerFunc),
+	}
+	s.setupRoutes()
+	s.reloadChaincodes() // Register dynamic endpoints at startup
+	go s.periodicReload()
+	return s
+}
+
+func (s *ChaincodeAPIServer) setupRoutes() {
+	s.router.Get("/refresh", s.refreshHandler)
+	// Catch-all for dynamic endpoints under /api/*
+	s.router.HandleFunc("/*", s.ServeHTTP)
+	// Optionally, keep NotFound for other unknown paths
+	s.router.NotFound(http.NotFound)
+}
+
+// ServeHTTP implements http.Handler for dynamic endpoints
+func (s *ChaincodeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	handler, ok := s.dynamicHandlers[r.URL.Path]
+	s.mu.RUnlock()
+	if ok {
+		handler(w, r)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+// Update dynamic endpoints based on latest metadata
+func (s *ChaincodeAPIServer) updateDynamicEndpoints() {
+	// No locking here; locking is handled by reloadChaincodes
+	// Build a set of valid paths from metadata
+	validPaths := make(map[string]struct{})
+	for _, meta := range s.metadata {
+		var parsed struct {
+			Contracts map[string]struct {
+				Transactions []struct {
+					Name       string `json:"name"`
+					Parameters []struct {
+						Name   string                 `json:"name"`
+						Schema map[string]interface{} `json:"schema"`
+					} `json:"parameters"`
+				} `json:"transactions"`
+			} `json:"contracts"`
+		}
+		if err := json.Unmarshal(meta.Metadata, &parsed); err != nil {
+			continue
+		}
+		for contract, contractMeta := range parsed.Contracts {
+			for _, tx := range contractMeta.Transactions {
+				path := "/api/chaincodes/" + meta.Name + "/" + contract + "/" + tx.Name
+				validPaths[path] = struct{}{}
+				// Add or update handler
+				s.dynamicHandlers[path] = s.makeFunctionHandler(meta.Name, contract, tx.Name, tx.Parameters)
+			}
+		}
+	}
+	// Remove handlers for paths no longer valid
+	for path := range s.dynamicHandlers {
+		if _, ok := validPaths[path]; !ok {
+			delete(s.dynamicHandlers, path)
+		}
+	}
+}
+
+// Handler for a specific contract function
+func (s *ChaincodeAPIServer) makeFunctionHandler(chaincode, contract, function string, params []struct {
+	Name   string                 `json:"name"`
+	Schema map[string]interface{} `json:"schema"`
+}) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Parse body as map[string]interface{}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			api.SendErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+		// Build args in order
+		args := make([]string, len(params))
+		for i, param := range params {
+			v, ok := body[param.Name]
+			if !ok {
+				api.SendErrorResponse(w, http.StatusBadRequest, "Missing parameter: "+param.Name)
+				return
+			}
+			// Convert to string for Fabric
+			args[i] = fmt.Sprintf("%v", v)
+		}
+		// Check mode (evaluate or submit)
+		mode := r.URL.Query().Get("mode")
+		if mode == "" {
+			mode = "evaluate"
+		}
+		if mode == "submit" {
+			f := function
+			if contract != "" {
+				f = fmt.Sprintf("%s:%s", contract, function)
+			}
+			txResult, err := s.fabricClient.InvokeTransaction(r.Context(), chaincode, f, args)
+			if err != nil {
+				api.SendErrorResponse(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			response := api.TransactionResponse{
+				Status:      "success",
+				Result:      string(txResult.Result),
+				TxID:        txResult.TxID,
+				Success:     txResult.Success,
+				BlockNumber: txResult.BlockNumber,
+				ResultCode:  txResult.ResultCode,
+			}
+			api.SendJSONResponse(w, http.StatusOK, response)
+			return
+		}
+		f := function
+		if contract != "" {
+			f = fmt.Sprintf("%s:%s", contract, function)
+		}
+		// Default: evaluate
+		result, err := s.fabricClient.EvaluateTransaction(r.Context(), chaincode, f, args)
+		if err != nil {
+			api.SendErrorResponse(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		response := api.TransactionResponse{
+			Status: "success",
+			Result: string(result),
+		}
+		api.SendJSONResponse(w, http.StatusOK, response)
+	}
+}
+
+// refreshHandler godoc
+// @Summary Refresh chaincode metadata and dynamic endpoints
+// @Description Reloads chaincode metadata and updates dynamic endpoints for all chaincodes
+// @Tags admin
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 500 {object} api.TransactionResponse
+// @Router /refresh [get]
+func (s *ChaincodeAPIServer) refreshHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.reloadChaincodes(); err != nil {
+		api.SendErrorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	api.SendJSONResponse(w, http.StatusOK, map[string]string{"status": "refreshed"})
+}
+
+func (s *ChaincodeAPIServer) reloadChaincodes() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, cc := range s.chaincodes {
+		meta, err := s.fetchChaincodeMetadata(cc)
+		if err != nil {
+			log.Printf("Failed to fetch metadata for %s: %v", cc, err)
+			continue
+		}
+		s.metadata[cc] = meta
+	}
+	// Update dynamic endpoints after metadata reload
+	s.updateDynamicEndpoints()
+	return nil
+}
+
+func (s *ChaincodeAPIServer) fetchChaincodeMetadata(chaincode string) (*ChaincodeMetadata, error) {
+	// Try org.hyperledger.fabric:GetMetadata, fallback to _lifecycle if needed
+	result, err := s.fabricClient.EvaluateTransaction(context.Background(), chaincode, "org.hyperledger.fabric:GetMetadata", []string{})
+	if err != nil {
+		return nil, err
+	}
+	return &ChaincodeMetadata{Name: chaincode, Metadata: result}, nil
+}
+
+func (s *ChaincodeAPIServer) periodicReload() {
+	for {
+		select {
+		case <-s.reloadTicker.C:
+			log.Println("Auto-refreshing chaincode metadata...")
+			s.reloadChaincodes()
+		case <-s.reloadStop:
+			return
+		}
+	}
+}
+
+func (s *ChaincodeAPIServer) Stop() {
+	close(s.reloadStop)
+	s.reloadTicker.Stop()
+}
+
+func generateSwaggerSpec(chaincode string) *spec.Swagger {
+	initialDescription := "API for interacting with Hyperledger Fabric network"
+	swagger := &spec.Swagger{
+		SwaggerProps: spec.SwaggerProps{
+			Swagger: "2.0",
+			Info: &spec.Info{
+				InfoProps: spec.InfoProps{
+					Title:       "Dynamic HLF API for " + chaincode,
+					Version:     "1.0",
+					Description: initialDescription, // will be updated below
+				},
+			},
+			BasePath:    "/",
+			Paths:       &spec.Paths{Paths: map[string]spec.PathItem{}},
+			Definitions: spec.Definitions{},
+		},
+	}
+
+	meta, err := fetchChaincodeMetadataForSwagger(chaincode)
+	if err == nil && meta != nil {
+		var parsed struct {
+			Info struct {
+				Title   string `json:"title"`
+				Version string `json:"version"`
+			} `json:"info"`
+			Contracts map[string]struct {
+				Info struct {
+					Title   string `json:"title"`
+					Version string `json:"version"`
+				} `json:"info"`
+				Name         string `json:"name"`
+				Transactions []struct {
+					Name       string   `json:"name"`
+					Tag        []string `json:"tag"`
+					Parameters []struct {
+						Name   string                 `json:"name"`
+						Schema map[string]interface{} `json:"schema"`
+					} `json:"parameters"`
+					Returns map[string]interface{} `json:"returns"`
+				} `json:"transactions"`
+				Default bool `json:"default"`
+			} `json:"contracts"`
+			Components struct {
+				Schemas map[string]interface{} `json:"schemas"`
+			} `json:"components"`
+		}
+		metadataStr := string(meta.Metadata)
+		if err := json.Unmarshal([]byte(metadataStr), &parsed); err == nil {
+			fmt.Printf("Parsed metadata for %s: components schemas count = %d\n", chaincode, len(parsed.Components.Schemas))
+
+			// Add schemas to definitions
+			for name, schema := range parsed.Components.Schemas {
+				fmt.Printf("Adding schema to definitions: %s\n", name)
+				schemaBytes, _ := json.Marshal(schema)
+				var s spec.Schema
+				if err := json.Unmarshal(schemaBytes, &s); err == nil {
+					swagger.Definitions[name] = s
+				}
+			}
+
+			// Extract all referenced schemas from parameters and add them to definitions
+			extractReferencedSchemas(parsed, swagger)
+			fmt.Printf("Final definitions count for %s: %d\n", chaincode, len(swagger.Definitions))
+
+			// Build contract and function links for description
+			var contractLinks []string
+			for contractName, contract := range parsed.Contracts {
+				contractUrl := "/swagger/" + chaincode + ".json#" + contractName
+				contractLink := "<a href='" + contractUrl + "'><code>" + chaincode + "/" + contractName + "</code></a>"
+				// Add function links for this contract
+				var functionLinks []string
+				for _, tx := range contract.Transactions {
+					// Build the JSON pointer for the endpoint
+					jsonPath := "#/paths/~1api~1" + chaincode + "~1" + contractName + "~1" + tx.Name + "/post"
+					funcUrl := "/swagger/" + chaincode + ".json" + jsonPath
+					functionLinks = append(functionLinks, "<a href='"+funcUrl+"'><code>"+tx.Name+"</code></a>")
+				}
+				if len(functionLinks) > 0 {
+					contractLink += ": [" + strings.Join(functionLinks, ", ") + "]"
+				}
+				contractLinks = append(contractLinks, contractLink)
+			}
+			if len(contractLinks) > 0 {
+				swagger.Info.Description = initialDescription + "<br/><br/>Supported contracts: <br/>" + strings.Join(contractLinks, "<br/>")
+			}
+			// For each contract and transaction, add a POST endpoint
+			for contractName, contract := range parsed.Contracts {
+				for _, tx := range contract.Transactions {
+					path := "/api/chaincodes/" + chaincode + "/" + contractName + "/" + tx.Name
+					// Build parameters schema
+					paramsSchema := spec.Schema{
+						SchemaProps: spec.SchemaProps{
+							Type:       []string{"object"},
+							Properties: map[string]spec.Schema{},
+							Required:   []string{},
+						},
+					}
+					for _, param := range tx.Parameters {
+						paramSchemaBytes, _ := json.Marshal(param.Schema)
+						var paramSchema spec.Schema
+						if err := json.Unmarshal(paramSchemaBytes, &paramSchema); err == nil {
+							// Convert any $ref paths from #/components/schemas/ to #/definitions/ format
+							convertRefsInSchema(&paramSchema)
+							paramsSchema.Properties[param.Name] = paramSchema
+							// swagger.Definitions[param.Name] = paramSchema
+							paramsSchema.Required = append(paramsSchema.Required, param.Name)
+						}
+					}
+					// Add the operation
+					swagger.Paths.Paths[path] = spec.PathItem{
+						PathItemProps: spec.PathItemProps{
+							Post: &spec.Operation{
+								OperationProps: spec.OperationProps{
+									ID:          chaincode + contractName + tx.Name,
+									Summary:     "Invoke function '" + tx.Name + "' on contract '" + contractName + "' in " + chaincode,
+									Description: "Invoke function '" + tx.Name + "' on contract '" + contractName + "' in chaincode " + chaincode + `. Use the 'mode' query parameter to choose between 'evaluate' (default) and 'submit'.`,
+									Consumes:    []string{"application/json"},
+									Produces:    []string{"application/json"},
+									Parameters: append([]spec.Parameter{
+										{
+											ParamProps: spec.ParamProps{
+												Name:     "body",
+												In:       "body",
+												Required: true,
+												Schema:   &paramsSchema,
+											},
+										},
+										{
+											ParamProps: spec.ParamProps{
+												Name:        "mode",
+												In:          "query",
+												Required:    false,
+												Description: "Transaction mode: 'evaluate' (default) or 'submit'",
+											},
+											SimpleSchema: spec.SimpleSchema{
+												Type: "string",
+											},
+										},
+									}, []spec.Parameter{}...),
+									Responses: &spec.Responses{
+										ResponsesProps: spec.ResponsesProps{
+											StatusCodeResponses: map[int]spec.Response{
+												200: {ResponseProps: spec.ResponseProps{Description: "Success"}},
+												400: {ResponseProps: spec.ResponseProps{Description: "Bad Request"}},
+												500: {ResponseProps: spec.ResponseProps{Description: "Internal Error"}},
+											},
+										},
+									},
+								},
+							},
+						},
+					}
+				}
+			}
+		}
+	}
+
+	// Always add generic invoke/evaluate endpoints
+	invokePath := "/api/chaincodes/" + chaincode + "/invoke"
+	evaluatePath := "/api/chaincodes/" + chaincode + "/evaluate"
+	swagger.Paths.Paths[invokePath] = spec.PathItem{
+		PathItemProps: spec.PathItemProps{
+			Post: &spec.Operation{
+				OperationProps: spec.OperationProps{
+					ID:          chaincode + "Invoke",
+					Summary:     "Invoke " + chaincode,
+					Description: "Invoke transaction on " + chaincode,
+					Consumes:    []string{"application/json"},
+					Produces:    []string{"application/json"},
+					Parameters: []spec.Parameter{
+						{
+							ParamProps: spec.ParamProps{
+								Name:     "body",
+								In:       "body",
+								Required: true,
+							},
+							SimpleSchema: spec.SimpleSchema{
+								Type: "object",
+							},
+						},
+					},
+					Responses: &spec.Responses{
+						ResponsesProps: spec.ResponsesProps{
+							StatusCodeResponses: map[int]spec.Response{
+								200: {ResponseProps: spec.ResponseProps{Description: "Success"}},
+								400: {ResponseProps: spec.ResponseProps{Description: "Bad Request"}},
+								500: {ResponseProps: spec.ResponseProps{Description: "Internal Error"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	swagger.Paths.Paths[evaluatePath] = spec.PathItem{
+		PathItemProps: spec.PathItemProps{
+			Post: &spec.Operation{
+				OperationProps: spec.OperationProps{
+					ID:          chaincode + "Evaluate",
+					Summary:     "Evaluate " + chaincode,
+					Description: "Evaluate transaction on " + chaincode,
+					Consumes:    []string{"application/json"},
+					Produces:    []string{"application/json"},
+					Parameters: []spec.Parameter{
+						{
+							ParamProps: spec.ParamProps{
+								Name:     "body",
+								In:       "body",
+								Required: true,
+							},
+							SimpleSchema: spec.SimpleSchema{
+								Type: "object",
+							},
+						},
+					},
+					Responses: &spec.Responses{
+						ResponsesProps: spec.ResponsesProps{
+							StatusCodeResponses: map[int]spec.Response{
+								200: {ResponseProps: spec.ResponseProps{Description: "Success"}},
+								400: {ResponseProps: spec.ResponseProps{Description: "Bad Request"}},
+								500: {ResponseProps: spec.ResponseProps{Description: "Internal Error"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return swagger
+}
+
+// extractReferencedSchemas scans parameter schemas for $ref references and ensures they're defined in swagger definitions
+func extractReferencedSchemas(parsed interface{}, swagger *spec.Swagger) {
+	// Convert parsed to a map for easier traversal
+	parsedBytes, _ := json.Marshal(parsed)
+	var parsedMap map[string]interface{}
+	json.Unmarshal(parsedBytes, &parsedMap)
+
+	// Get the components/schemas section
+	var allSchemas map[string]interface{}
+	if components, ok := parsedMap["components"].(map[string]interface{}); ok {
+		if schemas, ok := components["schemas"].(map[string]interface{}); ok {
+			allSchemas = schemas
+			fmt.Printf("Found %d schemas in components section\n", len(schemas))
+		}
+	}
+
+	if allSchemas == nil {
+		fmt.Println("No components/schemas section found in metadata")
+		return // No schemas to process
+	}
+
+	// Recursively extract all $ref references from the entire parsed structure
+	refs := extractRefs(parsedMap)
+	fmt.Printf("Found %d $ref references in metadata\n", len(refs))
+	for _, ref := range refs {
+		fmt.Printf("Found $ref: %s\n", ref)
+	}
+
+	// Keep track of processed schemas to avoid infinite loops
+	processed := make(map[string]bool)
+
+	// Process all found references
+	for _, ref := range refs {
+		processSchemaReference(ref, allSchemas, swagger, processed)
+	}
+}
+
+// processSchemaReference processes a single $ref and recursively handles nested references
+func processSchemaReference(ref string, allSchemas map[string]interface{}, swagger *spec.Swagger, processed map[string]bool) {
+	// Extract schema name from $ref (e.g., "#/components/schemas/CreateSupplyChainDto" -> "CreateSupplyChainDto")
+	if !strings.HasPrefix(ref, "#/components/schemas/") {
+		return // Not a components schema reference
+	}
+
+	schemaName := strings.TrimPrefix(ref, "#/components/schemas/")
+
+	// Skip if already processed
+	if processed[schemaName] {
+		return
+	}
+	processed[schemaName] = true
+
+	// Check if schema exists in the components
+	schema, exists := allSchemas[schemaName]
+	if !exists {
+		return // Schema not found in components
+	}
+
+	// Add the schema to swagger definitions if not already present
+	if _, alreadyDefined := swagger.Definitions[schemaName]; !alreadyDefined {
+		// First, recursively process any nested $refs in this schema
+		nestedRefs := extractRefs(schema)
+		for _, nestedRef := range nestedRefs {
+			processSchemaReference(nestedRef, allSchemas, swagger, processed)
+		}
+
+		// Now convert and add the schema to definitions
+		schemaBytes, _ := json.Marshal(schema)
+		var s spec.Schema
+		if err := json.Unmarshal(schemaBytes, &s); err == nil {
+			// Convert any $ref paths from #/components/schemas/ to #/definitions/ format
+			convertRefsInSchema(&s)
+			swagger.Definitions[schemaName] = s
+		}
+	}
+}
+
+// extractRefs recursively extracts all $ref references from a data structure
+func extractRefs(data interface{}) []string {
+	var refs []string
+
+	switch v := data.(type) {
+	case map[string]interface{}:
+		// Check if this object has a $ref
+		if ref, ok := v["$ref"].(string); ok {
+			refs = append(refs, ref)
+		}
+		// Recursively check all values
+		for _, value := range v {
+			refs = append(refs, extractRefs(value)...)
+		}
+	case []interface{}:
+		// Recursively check all array elements
+		for _, item := range v {
+			refs = append(refs, extractRefs(item)...)
+		}
+	}
+
+	return refs
+}
+
+// convertRefsInSchema recursively converts $ref paths from OpenAPI 3.0 format to Swagger 2.0 format
+func convertRefsInSchema(schema *spec.Schema) {
+	if schema.Ref.String() != "" {
+		refStr := schema.Ref.String()
+		if strings.HasPrefix(refStr, "#/components/schemas/") {
+			newRef := strings.Replace(refStr, "#/components/schemas/", "#/definitions/", 1)
+			schema.Ref = spec.MustCreateRef(newRef)
+		}
+	}
+
+	// Process properties
+	for _, prop := range schema.Properties {
+		convertRefsInSchema(&prop)
+	}
+
+	// Process items (for arrays)
+	if schema.Items != nil && schema.Items.Schema != nil {
+		convertRefsInSchema(schema.Items.Schema)
+	}
+
+	// Process additional properties
+	if schema.AdditionalProperties != nil && schema.AdditionalProperties.Schema != nil {
+		convertRefsInSchema(schema.AdditionalProperties.Schema)
+	}
+}
+
+// fetchChaincodeMetadataForSwagger is a helper to get metadata for a chaincode for Swagger generation
+func fetchChaincodeMetadataForSwagger(chaincode string) (*ChaincodeMetadata, error) {
+	// Use a temporary Fabric client for this context (reuse logic from ChaincodeAPIServer if possible)
+	// For simplicity, use the same logic as fetchChaincodeMetadata in ChaincodeAPIServer
+	// (Assume fabricClient is globally accessible or refactor as needed)
+	if globalFabricClient == nil {
+		return nil, fmt.Errorf("fabric client not initialized")
+	}
+	result, err := globalFabricClient.EvaluateTransaction(context.Background(), chaincode, "org.hyperledger.fabric:GetMetadata", []string{})
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("metadata: %s", string(result))
+	return &ChaincodeMetadata{Name: chaincode, Metadata: result}, nil
+}
+
+var globalFabricClient *fabric.FabricClient
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -117,14 +727,67 @@ func runServer(cmd *cobra.Command, args []string) {
 		log.Fatalf("Failed to create Fabric client: %v", err)
 	}
 	defer fabricClient.Close()
+	globalFabricClient = fabricClient
 
+	peerConn, err := fabricClient.SelectRandomPeer()
+	if err != nil {
+		log.Fatalf("Failed to select random peer: %v", err)
+	}
+
+	keyBytes, err := os.ReadFile(keyPath)
+	if err != nil {
+		log.Fatalf("Failed to read key file: %v", err)
+	}
+	certBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		log.Fatalf("Failed to read cert file: %v", err)
+	}
+	adminID, _, err := fabricClient.GetAdminIdentity(context.Background(), keyBytes, certBytes)
+	if err != nil {
+		log.Fatalf("Failed to get admin identity: %v", err)
+	}
+
+	committedCCs, err := fabricClient.GetCommittedChaincodes(context.Background(), peerConn, adminID, channelName)
+	if err != nil {
+		log.Printf("Failed to get committed chaincodes, but continuing: %v", err)
+	} else {
+		for _, committedCC := range committedCCs {
+			exists := false
+			for _, cc := range chaincodes {
+				if cc == committedCC.Name {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				chaincodes = append(chaincodes, committedCC.Name)
+			}
+		}
+	}
+	if peerConn != nil {
+		log.Printf("Closing peer connection")
+		peerConn.Close()
+	}
+
+	log.Printf("chaincodes: %v", chaincodes)
 	// Initialize API handlers
 	handler := api.NewHandler(fabricClient)
+
+	// Initialize metrics collector
+	metricsCollector := metrics.NewMetricsCollector(30 * time.Second)
+	metricsCollector.Start()
+	defer metricsCollector.Stop()
 
 	// Set up Chi router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(metrics.HTTPMiddleware)
+
+	// Root endpoint - redirect to playground
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/playground", http.StatusMovedPermanently)
+	})
 
 	// Health check endpoint
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -132,16 +795,155 @@ func runServer(cmd *cobra.Command, args []string) {
 		w.Write([]byte("OK"))
 	})
 
+	// Metrics endpoint
+	r.Get("/metrics", promhttp.Handler().ServeHTTP)
+
 	// Swagger documentation
-	r.Get("/swagger/*", httpSwagger.Handler(
-		httpSwagger.URL("/swagger/doc.json"),
-	))
+	r.Get("/swagger/*", func(w http.ResponseWriter, r *http.Request) {
+		url := r.URL.Query().Get("url")
+		if url == "" {
+			url = "/swagger/doc.json"
+		}
+		httpSwagger.Handler(
+			httpSwagger.URL(url),
+		)(w, r)
+	})
+
+	// Chaincode Playground UI
+	r.Get("/playground", func(w http.ResponseWriter, r *http.Request) {
+		content, err := playgroundHTML.ReadFile("docs/custom-swagger.html")
+		if err != nil {
+			http.Error(w, "Failed to serve playground HTML", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(content)
+	})
+
+	// Swagger Index HTML
+	r.Get("/swagger/index.html", func(w http.ResponseWriter, r *http.Request) {
+		content, err := swaggerIndexHTML.ReadFile("docs/swagger-index.html")
+		if err != nil {
+			http.Error(w, "Failed to serve swagger index HTML", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(content)
+	})
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/invoke", handler.InvokeHandler)
 		r.Post("/evaluate", handler.EvaluateHandler)
+		r.Get("/chaincodes", handler.GetChaincodesHandler)
 	})
+
+	// Dynamic chaincode APIs
+	ccAPIServer := NewChaincodeAPIServer(handler, fabricClient, chaincodes)
+	r.Mount("/api/chaincodes", ccAPIServer.router)
+
+	// Swagger index for all chaincodes
+	r.Get("/swagger/index.json", func(w http.ResponseWriter, r *http.Request) {
+		var chaincodeDocs []map[string]string
+		log.Printf("Generating Swagger index for %d chaincodes: %v", len(chaincodes), chaincodes)
+
+		for _, cc := range chaincodes {
+			chaincodeDocs = append(chaincodeDocs, map[string]string{
+				"name":            cc,
+				"url":             "/swagger/" + cc + ".json",
+				"contracts_index": "/swagger/" + cc + "/index.json",
+			})
+		}
+
+		log.Printf("Generated %d chaincode docs", len(chaincodeDocs))
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(chaincodeDocs)
+	})
+
+	// Debug endpoint to check chaincode configuration
+	r.Get("/debug/chaincodes", func(w http.ResponseWriter, r *http.Request) {
+		debugInfo := map[string]interface{}{
+			"chaincodes":       chaincodes,
+			"chaincodes_count": len(chaincodes),
+			"server_time":      time.Now().Format(time.RFC3339),
+			"endpoints": map[string]string{
+				"swagger_index": "/swagger/index.json",
+				"playground":    "/playground",
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(debugInfo)
+	})
+
+	// Debug endpoint to check embedded files
+	r.Get("/debug/embedded", func(w http.ResponseWriter, r *http.Request) {
+		playgroundContent, playgroundErr := playgroundHTML.ReadFile("docs/custom-swagger.html")
+		swaggerContent, swaggerErr := swaggerIndexHTML.ReadFile("docs/swagger-index.html")
+
+		debugInfo := map[string]interface{}{
+			"embedded_files": map[string]interface{}{
+				"playground": map[string]interface{}{
+					"accessible": playgroundErr == nil,
+					"size":       len(playgroundContent),
+					"error":      playgroundErr,
+				},
+				"swagger_index": map[string]interface{}{
+					"accessible": swaggerErr == nil,
+					"size":       len(swaggerContent),
+					"error":      swaggerErr,
+				},
+			},
+			"server_time": time.Now().Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(debugInfo)
+	})
+	// Swagger contract index for each chaincode
+	for _, cc := range chaincodes {
+		chaincode := cc // capture range variable
+		r.Get("/swagger/"+chaincode+"/index.json", func(w http.ResponseWriter, r *http.Request) {
+			meta, err := fetchChaincodeMetadataForSwagger(chaincode)
+			if err != nil || meta == nil {
+				fmt.Println("Error fetching chaincode metadata:", err)
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte("{}"))
+				return
+			}
+			var parsed struct {
+				Contracts map[string]struct {
+					Info struct {
+						Title   string `json:"title"`
+						Version string `json:"version"`
+					} `json:"info"`
+				} `json:"contracts"`
+			}
+			if err := json.Unmarshal(meta.Metadata, &parsed); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte("{}"))
+				return
+			}
+			var contracts []map[string]string
+			for contractName, contract := range parsed.Contracts {
+				contracts = append(contracts, map[string]string{
+					"name":  contractName,
+					"title": contract.Info.Title,
+					"url":   "/swagger/" + chaincode + ".json#" + contractName,
+				})
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(contracts)
+		})
+	}
+
+	// Dynamic Swagger docs for each chaincode
+	for _, cc := range chaincodes {
+		chaincode := cc // capture range variable
+		r.Get("/swagger/"+chaincode+".json", func(w http.ResponseWriter, r *http.Request) {
+			swagger := generateSwaggerSpec(chaincode)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(swagger)
+		})
+	}
 
 	log.Printf("Server starting on port %s with %d peers configured", port, len(peerConfigs))
 	log.Printf("Swagger documentation available at http://localhost:%s/swagger/", port)

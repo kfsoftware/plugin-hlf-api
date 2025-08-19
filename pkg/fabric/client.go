@@ -10,6 +10,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/hyperledger/fabric-admin-sdk/pkg/chaincode"
+	adminid "github.com/hyperledger/fabric-admin-sdk/pkg/identity"
 	"github.com/hyperledger/fabric-gateway/pkg/client"
 	"github.com/hyperledger/fabric-gateway/pkg/identity"
 	"google.golang.org/grpc"
@@ -46,6 +48,12 @@ type FabricClient struct {
 	rand   *rand.Rand
 }
 
+// ChaincodeMetadata holds metadata for a chaincode
+type ChaincodeMetadata struct {
+	Name     string
+	Metadata []byte
+}
+
 func ParseX509Certificate(contents []byte) (*x509.Certificate, error) {
 	if len(contents) == 0 {
 		return nil, errors.New("certificate pem is empty")
@@ -77,8 +85,55 @@ func NewFabricClient(config *ClientConfig) (*FabricClient, error) {
 	}, nil
 }
 
+type ChaincodeDefinition struct {
+	Name string
+}
+
+func (fc *FabricClient) GetCommittedChaincodes(
+	ctx context.Context,
+	peerConn *grpc.ClientConn,
+	adminIdentity adminid.SigningIdentity,
+	channelName string,
+) ([]*ChaincodeDefinition, error) {
+	peer := chaincode.NewGateway(peerConn, adminIdentity)
+	chaincodeRes, err := peer.QueryCommitted(ctx, channelName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query committed chaincodes: %w", err)
+	}
+	var chaincodeDefs []*ChaincodeDefinition
+	for _, chaincodeDef := range chaincodeRes.GetChaincodeDefinitions() {
+		chaincodeDefs = append(chaincodeDefs, &ChaincodeDefinition{
+			Name: chaincodeDef.Name,
+		})
+	}
+	return chaincodeDefs, nil
+}
+
+func (p *FabricClient) GetAdminIdentity(ctx context.Context, keyBytes []byte, certBytes []byte) (adminid.SigningIdentity, identity.Sign, error) {
+	cert, err := identity.CertificateFromPEM(certBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read certificate: %w", err)
+	}
+
+	priv, err := identity.PrivateKeyFromPEM(keyBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read private key: %w", err)
+	}
+
+	signingIdentity, err := adminid.NewPrivateKeySigningIdentity(p.config.MspID, cert, priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create signing identity: %w", err)
+	}
+
+	signer, err := identity.NewPrivateKeySign(priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create signer: %w", err)
+	}
+	return signingIdentity, signer, nil
+}
+
 // selectRandomPeer returns a random peer connection from the available peers
-func (fc *FabricClient) selectRandomPeer() (*grpc.ClientConn, error) {
+func (fc *FabricClient) SelectRandomPeer() (*grpc.ClientConn, error) {
 	// Select a random peer configuration
 	peerConfig := fc.config.Peers[fc.rand.Intn(len(fc.config.Peers))]
 
@@ -145,7 +200,7 @@ func (fc *FabricClient) createGatewayConnection(conn *grpc.ClientConn) (*client.
 // InvokeTransaction submits a transaction to the ledger
 func (fc *FabricClient) InvokeTransaction(ctx context.Context, chaincodeName string, fcn string, args []string) (*TransactionResult, error) {
 	// Select a random peer and create connection
-	selectedPeer, err := fc.selectRandomPeer()
+	selectedPeer, err := fc.SelectRandomPeer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to select peer: %w", err)
 	}
@@ -184,7 +239,7 @@ func (fc *FabricClient) InvokeTransaction(ctx context.Context, chaincodeName str
 // EvaluateTransaction evaluates a transaction without submitting to the ledger
 func (fc *FabricClient) EvaluateTransaction(ctx context.Context, chaincodeName string, fcn string, args []string) ([]byte, error) {
 	// Select a random peer and create connection
-	selectedPeer, err := fc.selectRandomPeer()
+	selectedPeer, err := fc.SelectRandomPeer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to select peer: %w", err)
 	}
@@ -208,6 +263,16 @@ func (fc *FabricClient) EvaluateTransaction(ctx context.Context, chaincodeName s
 		return nil, fmt.Errorf("failed to evaluate transaction: %w", err)
 	}
 	return result, nil
+}
+
+// EvaluateChaincodeMetadata fetches the chaincode metadata using the same logic as fetchChaincodeMetadata in main.go.
+func (fc *FabricClient) EvaluateChaincodeMetadata(chaincode string) (*ChaincodeMetadata, error) {
+	// Try org.hyperledger.fabric:GetMetadata, fallback to _lifecycle if needed
+	result, err := fc.EvaluateTransaction(context.Background(), chaincode, "org.hyperledger.fabric:GetMetadata", []string{})
+	if err != nil {
+		return nil, err
+	}
+	return &ChaincodeMetadata{Name: chaincode, Metadata: result}, nil
 }
 
 // Close closes the client
