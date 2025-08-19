@@ -347,18 +347,27 @@ func generateSwaggerSpec(chaincode string) *spec.Swagger {
 				Default bool `json:"default"`
 			} `json:"contracts"`
 			Components struct {
-				Schemas map[string]map[string]interface{} `json:"schemas"`
+				Schemas map[string]interface{} `json:"schemas"`
 			} `json:"components"`
 		}
-		if err := json.Unmarshal(meta.Metadata, &parsed); err == nil {
+		metadataStr := string(meta.Metadata)
+		if err := json.Unmarshal([]byte(metadataStr), &parsed); err == nil {
+			fmt.Printf("Parsed metadata for %s: components schemas count = %d\n", chaincode, len(parsed.Components.Schemas))
+
 			// Add schemas to definitions
 			for name, schema := range parsed.Components.Schemas {
+				fmt.Printf("Adding schema to definitions: %s\n", name)
 				schemaBytes, _ := json.Marshal(schema)
 				var s spec.Schema
 				if err := json.Unmarshal(schemaBytes, &s); err == nil {
 					swagger.Definitions[name] = s
 				}
 			}
+
+			// Extract all referenced schemas from parameters and add them to definitions
+			extractReferencedSchemas(parsed, swagger)
+			fmt.Printf("Final definitions count for %s: %d\n", chaincode, len(swagger.Definitions))
+
 			// Build contract and function links for description
 			var contractLinks []string
 			for contractName, contract := range parsed.Contracts {
@@ -396,7 +405,10 @@ func generateSwaggerSpec(chaincode string) *spec.Swagger {
 						paramSchemaBytes, _ := json.Marshal(param.Schema)
 						var paramSchema spec.Schema
 						if err := json.Unmarshal(paramSchemaBytes, &paramSchema); err == nil {
+							// Convert any $ref paths from #/components/schemas/ to #/definitions/ format
+							convertRefsInSchema(&paramSchema)
 							paramsSchema.Properties[param.Name] = paramSchema
+							// swagger.Definitions[param.Name] = paramSchema
 							paramsSchema.Required = append(paramsSchema.Required, param.Name)
 						}
 					}
@@ -523,6 +535,133 @@ func generateSwaggerSpec(chaincode string) *spec.Swagger {
 	return swagger
 }
 
+// extractReferencedSchemas scans parameter schemas for $ref references and ensures they're defined in swagger definitions
+func extractReferencedSchemas(parsed interface{}, swagger *spec.Swagger) {
+	// Convert parsed to a map for easier traversal
+	parsedBytes, _ := json.Marshal(parsed)
+	var parsedMap map[string]interface{}
+	json.Unmarshal(parsedBytes, &parsedMap)
+
+	// Get the components/schemas section
+	var allSchemas map[string]interface{}
+	if components, ok := parsedMap["components"].(map[string]interface{}); ok {
+		if schemas, ok := components["schemas"].(map[string]interface{}); ok {
+			allSchemas = schemas
+			fmt.Printf("Found %d schemas in components section\n", len(schemas))
+		}
+	}
+
+	if allSchemas == nil {
+		fmt.Println("No components/schemas section found in metadata")
+		return // No schemas to process
+	}
+
+	// Recursively extract all $ref references from the entire parsed structure
+	refs := extractRefs(parsedMap)
+	fmt.Printf("Found %d $ref references in metadata\n", len(refs))
+	for _, ref := range refs {
+		fmt.Printf("Found $ref: %s\n", ref)
+	}
+
+	// Keep track of processed schemas to avoid infinite loops
+	processed := make(map[string]bool)
+
+	// Process all found references
+	for _, ref := range refs {
+		processSchemaReference(ref, allSchemas, swagger, processed)
+	}
+}
+
+// processSchemaReference processes a single $ref and recursively handles nested references
+func processSchemaReference(ref string, allSchemas map[string]interface{}, swagger *spec.Swagger, processed map[string]bool) {
+	// Extract schema name from $ref (e.g., "#/components/schemas/CreateSupplyChainDto" -> "CreateSupplyChainDto")
+	if !strings.HasPrefix(ref, "#/components/schemas/") {
+		return // Not a components schema reference
+	}
+
+	schemaName := strings.TrimPrefix(ref, "#/components/schemas/")
+
+	// Skip if already processed
+	if processed[schemaName] {
+		return
+	}
+	processed[schemaName] = true
+
+	// Check if schema exists in the components
+	schema, exists := allSchemas[schemaName]
+	if !exists {
+		return // Schema not found in components
+	}
+
+	// Add the schema to swagger definitions if not already present
+	if _, alreadyDefined := swagger.Definitions[schemaName]; !alreadyDefined {
+		// First, recursively process any nested $refs in this schema
+		nestedRefs := extractRefs(schema)
+		for _, nestedRef := range nestedRefs {
+			processSchemaReference(nestedRef, allSchemas, swagger, processed)
+		}
+
+		// Now convert and add the schema to definitions
+		schemaBytes, _ := json.Marshal(schema)
+		var s spec.Schema
+		if err := json.Unmarshal(schemaBytes, &s); err == nil {
+			// Convert any $ref paths from #/components/schemas/ to #/definitions/ format
+			convertRefsInSchema(&s)
+			swagger.Definitions[schemaName] = s
+		}
+	}
+}
+
+// extractRefs recursively extracts all $ref references from a data structure
+func extractRefs(data interface{}) []string {
+	var refs []string
+
+	switch v := data.(type) {
+	case map[string]interface{}:
+		// Check if this object has a $ref
+		if ref, ok := v["$ref"].(string); ok {
+			refs = append(refs, ref)
+		}
+		// Recursively check all values
+		for _, value := range v {
+			refs = append(refs, extractRefs(value)...)
+		}
+	case []interface{}:
+		// Recursively check all array elements
+		for _, item := range v {
+			refs = append(refs, extractRefs(item)...)
+		}
+	}
+
+	return refs
+}
+
+// convertRefsInSchema recursively converts $ref paths from OpenAPI 3.0 format to Swagger 2.0 format
+func convertRefsInSchema(schema *spec.Schema) {
+	if schema.Ref.String() != "" {
+		refStr := schema.Ref.String()
+		if strings.HasPrefix(refStr, "#/components/schemas/") {
+			newRef := strings.Replace(refStr, "#/components/schemas/", "#/definitions/", 1)
+			schema.Ref = spec.MustCreateRef(newRef)
+		}
+	}
+
+	// Process properties
+	for _, prop := range schema.Properties {
+		convertRefsInSchema(&prop)
+	}
+
+	// Process items (for arrays)
+	if schema.Items != nil && schema.Items.Schema != nil {
+		convertRefsInSchema(schema.Items.Schema)
+	}
+
+	// Process additional properties
+	if schema.AdditionalProperties != nil && schema.AdditionalProperties.Schema != nil {
+		convertRefsInSchema(schema.AdditionalProperties.Schema)
+	}
+}
+
 // fetchChaincodeMetadataForSwagger is a helper to get metadata for a chaincode for Swagger generation
 func fetchChaincodeMetadataForSwagger(chaincode string) (*ChaincodeMetadata, error) {
 	// Use a temporary Fabric client for this context (reuse logic from ChaincodeAPIServer if possible)
@@ -531,17 +670,12 @@ func fetchChaincodeMetadataForSwagger(chaincode string) (*ChaincodeMetadata, err
 	if globalFabricClient == nil {
 		return nil, fmt.Errorf("fabric client not initialized")
 	}
-	metadata, err := globalFabricClient.EvaluateChaincodeMetadata(chaincode)
+	result, err := globalFabricClient.EvaluateTransaction(context.Background(), chaincode, "org.hyperledger.fabric:GetMetadata", []string{})
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("metadata: %s", string(metadata.Metadata))
-	return &ChaincodeMetadata{Name: chaincode, Metadata: metadata.Metadata}, nil
-}
-
-// Add this method to FabricClient for metadata fetch for Swagger
-type fabricClientSwagger interface {
-	EvaluateChaincodeMetadata(chaincode string) (*ChaincodeMetadata, error)
+	fmt.Printf("metadata: %s", string(result))
+	return &ChaincodeMetadata{Name: chaincode, Metadata: result}, nil
 }
 
 var globalFabricClient *fabric.FabricClient
